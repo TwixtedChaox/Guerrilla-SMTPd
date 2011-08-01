@@ -27,9 +27,10 @@ connection every time.
 
 So, how did we eliminate this bottleneck? Conveniently, PHP has a socket 
 library which means we can use PHP to write a simple and efficient SMTP server.
-The PHP server runs as a daemon, so it doesn't need to launch a new process for
-each incoming email. It also doesn't need to run and insane amount of checks 
-for each connection.
+If the server runs as a daemon, then the system doesn't need to launch a new 
+process for each incoming email. It also doesn't need to run and insane amount 
+of checks for each connection (eg, NS Lookups, white-lists, black-lists, SPF
+domain keys, Spam Assasin, etc).
 
 We only need to open a single database connection and a single process can be 
 re-used indefinitely. The PHP server is able to multiplex simultaneous 
@@ -70,7 +71,7 @@ http://www.php.net/manual/en/book.iconv.php
 - Setup your MySQL database (schema below)
 
 - Start on the command line like this:
-root@server[] php smtpd.php -l log.txt &
+root@server[] php smtpd.php -l log.txt
 Arguments
 -p Specify the port number
 -v Verbose output to the console
@@ -95,13 +96,20 @@ if (!$running) {
 die();
 
 
-Here is an example of /home/user/startsmtpd
+Here is an example of /home/user/startsmtpd which will start the smtpd
+in the background:
 
 #!/bin/bash
-php /home/user/smtpd.php -l /home/user/log.txt -v &
+/usr/bin/nohup php /home/user/smtpd.php -l /home/user/log.txt & > /dev/null
 
 Save the 2 lines above in to a file named startsmtpd
-and then do: chmod 755 startsmtpd
+and then do: 
+$[]chmod 755 startsmtpd
+
+You may also place /home/user/startsmtpd in /etc/rc.local so that the
+server starts when the server boots up.
+
+(Note: /usr/bin/nohup ensures that smtpd.php stays running in the background)
 
 Database Schema:
 
@@ -131,18 +139,17 @@ http://www.greenend.org.uk/rjk/2000/05/21/smtp-replies.html
 http://pleac.sourceforge.net/pleac_php/processmanagementetc.html
 http://www.tuxradar.com/practicalphp/16/1/6
 http://www.freesoft.org/CIE/RFC/1123/92.htm
-
 */
 // typically, this value should be set in php.ini, PHP may ignore it here!
-ini_set('memory_limit', '128M'); 
+ini_set('memory_limit', '512M');
 
 // needed for trapping unix signals
-declare (ticks = 1); 
+declare (ticks = 1);
 
 // It's a daemon! We should not exit... A warning though:
 // PHP does have memory leaks and you may need to have another script to
 // watch your daemon process and restart of needed.
-set_time_limit(0); 
+set_time_limit(0);
 
 // Register a shutdown function when we exit
 register_shutdown_function('smtp_shutdown'); // shutdown sockets after a normal shutdown procedure
@@ -151,7 +158,7 @@ register_shutdown_function('smtp_shutdown'); // shutdown sockets after a normal 
 set_error_handler("error_handler");
 
 // install a signal handler
-pcntl_signal(SIGCHLD, "signal_handler"); 
+pcntl_signal(SIGCHLD, "signal_handler");
 
 // Process arguments
 if (isset($argc) && ($argc > 1)) {
@@ -170,46 +177,56 @@ if (isset($argc) && ($argc > 1)) {
 if (!isset($listen_port)) {
     $listen_port = 25;
 }
-if (isset($log_file)) { 
-  
-    if (!file_exists($log_file) && file_exists(dirname(__FILE__).'/'.$log_file)) {
-        $log_file = dirname(__FILE__).'/'.$log_file;
+if (isset($log_file)) {
+
+    if (!file_exists($log_file) && file_exists(dirname(__file__) . '/' . $log_file)) {
+        $log_file = dirname(__file__) . '/' . $log_file;
     } else {
-        $log_file = dirname(__FILE__).'/log.txt';
-    } 
+        $log_file = dirname(__file__) . '/log.txt';
+    }
 } else {
-    
+
     echo "log file not specified[]\n";
     $log_file = false;
 }
 if (!isset($verbose)) {
-    
+
     $verbose = false;
 }
 
 ##############################################################
 # Configuration start
 ##############################################################
-define('MAX_SMTP_CLIENTS', 100);
-define('SMTP_HOST_NAME', 'guerrillamail.com');
-define('GSMTP_LOG_FILE', $log_file);
-define('GSMTP_VERBOSE', $verbose);
 
-define('MYSQL_HOST', 'localhost');
-define('MYSQL_USER', 'gmail_mail');
-define('MYSQL_PASS', 'ok');
-define('MYSQL_DB', 'gmail_mail');
+if (file_exists(dirname(__file__) . '/smtpd-config.php')) {
+    // place a copy of the define statements in to smtpd-config.php
+    require_once (dirname(__file__) . '/smtpd-config.php');
+} else {
+    // defaults if smtpd-config.php is not available
+    define('MAX_SMTP_CLIENTS', 400);
+    define('GSMTP_MAX_SIZE', 131072);
+    define('GSMTP_HOST_NAME', 'guerrillamail.com');
+    define('GSMTP_LOG_FILE', $log_file);
+    define('GSMTP_VERBOSE', $verbose);
+    define('GSTMP_TIMEOUT', 10); // how many seconds before timeout.
+    define('MYSQL_HOST', 'localhost');
+    define('MYSQL_USER', 'gmail_mail');
+    define('MYSQL_PASS', 'y/b9rg26D=9A');
+    define('MYSQL_DB', 'gmail_mail');
 
-define('GM_MAIL_TABLE', 'new_mail'); // MySQL table for storage
+    define('GM_MAIL_TABLE', 'new_mail'); // MySQL table for storage
 
-define('GM_PRIMARY_MAIL_HOST', 'guerrillamailblock.com'); // The primary domain name of you email.
+    define('GM_PRIMARY_MAIL_HOST', 'guerrillamailblock.com'); // The primary domain name of you email.
 
-// Allowed hosts, a list of domains accepted by this server. Comma dilimited, do not include spaces
-define('GM_ALLOWED_HOSTS',
-    'guerrillamailblock.com,guerrillamail.com,guerrillamail.net,guerrillamail.biz,guerrillamail.org,sharklasers.com');
-define('FORWARD_GMAIL_TO', 'flashmob@gmail.com');
-define('GMAIL_EMAIL', 'webmaster@sharklasers.com');
+    // Allowed hosts, a list of domains accepted by this server. Comma dilimited, do not include spaces
+    define('GM_ALLOWED_HOSTS',
+        'guerrillamailblock.com,guerrillamail.com,guerrillamail.net,guerrillamail.biz,guerrillamail.org,sharklasers.com');
+    define('FORWARD_GMAIL_TO', 'flashmob@gmail.com');
+    define('GMAIL_EMAIL', 'webmaster@sharklasers.com');
 
+    define('GSMTP_VERIFY_USERS', false);
+
+}
 ##############################################################
 # Configuration end
 ##############################################################
@@ -246,7 +263,8 @@ function error_handler($errno, $errstr, $errfile, $errline, $errcontext)
  * @param mixed $signal
  * @return
  */
-function signal_handler($signal) {
+function signal_handler($signal)
+{
     global $master_socket;
     switch ($signal) {
         case SIGCHLD:
@@ -271,7 +289,7 @@ function signal_handler($signal) {
 
     }
 }
-// 
+//
 /**
  * smtp_shutdown()
  * This is our shutdown function, in
@@ -281,8 +299,9 @@ function signal_handler($signal) {
  * Do not need to call this function directly.
  * @return
  */
-function smtp_shutdown() {
-    
+function smtp_shutdown()
+{
+
     global $clients;
     foreach ($clients as $client_id => $val) {
         if (is_resource($sock)) {
@@ -300,7 +319,8 @@ function smtp_shutdown() {
  * @param int $client_id
  * @return string, or false if no data was present in the buffer
  */
-function read_line(&$clients, $client_id) {
+function read_line(&$clients, $client_id)
+{
 
 
     if ($clients[$client_id]['read_buffer_ready']) {
@@ -345,7 +365,8 @@ function close_client(&$sock, $msg = "221 Bye\r\n")
 function log_line($l, $log_level = 2)
 {
     $l = trim($l);
-    if (!strlen($l)) return false;
+    if (!strlen($l))
+        return false;
     if (($log_level == 1) && (GSMTP_VERBOSE)) {
         echo $l . "\n";
     }
@@ -394,7 +415,7 @@ for (;; ) {
             // the child
             //posix_setsid();
             /* TO DO Accept incoming requests and handle them as child processes */
-           
+
             $client_count = 0;
             while (is_resource($master_socket)) {
 
@@ -406,7 +427,7 @@ for (;; ) {
                 # READ from the sockets or accept new connections
                 $N = null;
                 if (!empty($read)) {
- 
+
                     $ready = socket_select($read, $N, $N, null); // are there any sockets need reading?
                     if ($ready) {
                         if (in_array($master_socket, $read)) { // new connection?
@@ -435,9 +456,9 @@ for (;; ) {
                             }
 
                         }
-                       
+
                         unset($read[0]); // remove the master socket, we do not read it
-                       
+
 
                         # Check each soocket and read from it
                         foreach ($read as $client_id => $sock) {
@@ -451,11 +472,11 @@ for (;; ) {
                             while (true) {
                                 if ($buff === '') {
                                     // no more to read
-                                    
-                                    if (($clients[$client_id]['time'] + 10) < time()) {
+
+                                    if (($clients[$client_id]['time'] + GSMTP_TIMEOUT) < time()) {
                                         log_line("[$client_id] Timed Out! state:" . $clients[$client_id]['state'], 1);
                                         // nothing read for over 10 sec, TIMEOUT!
-                                        kill_client($client_id, $clients, $read, '421 ' . SMTP_HOST_NAME .
+                                        kill_client($client_id, $clients, $read, '421 ' . GSMTP_HOST_NAME .
                                             ': SMTP command timeout - closing connection');
                                     }
                                     break;
@@ -464,14 +485,14 @@ for (;; ) {
                                     log_line('[' . $client_id . ']failed to read from:' . socket_strerror(socket_last_error
                                         ($sock)));
                                     kill_client($client_id, $clients, $read);
-                                    
+
                                     break;
                                 } else {
                                     // Read the data in to the read buffer
-                                    
+
                                     $clients[$client_id]['time'] = time();
                                     $clients[$client_id]['read_buffer'] .= $buff;
-                                    
+
                                     // Determine if the buffer is ready
                                     // The are two states when we determine if the buffer is ready.
                                     // State 1 is the command state, when we wait for a command from
@@ -484,12 +505,12 @@ for (;; ) {
                                         if (strpos($buff, "\r\n", strlen($buff) - 2) !== false) {
                                             $clients[$client_id]['read_buffer_ready'] = true;
                                         }
-                                        
+
                                     } elseif ($clients[$client_id]['state'] === 2) {
                                         // DATA reading state
                                         // not ready unless you get a \r\n.\r\n at the end
                                         $len = strlen($clients[$client_id]['read_buffer']);
-                                        if (($len > 1048576) || (($len > 4) && (strpos($clients[$client_id]['read_buffer'],
+                                        if (($len > GSMTP_MAX_SIZE) || (($len > 4) && (strpos($clients[$client_id]['read_buffer'],
                                             "\r\n.\r\n", $len - 5)) !== false)) {
                                             $clients[$client_id]['read_buffer_ready'] = true; // finished
                                             $clients[$client_id]['read_buffer'] = substr($clients[$client_id]['read_buffer'],
@@ -514,10 +535,10 @@ for (;; ) {
                 foreach ($clients as $client_id => $client) {
                     if (!in_array($clients[$client_id]['socket'], $read)) {
                         // we didn't read any data from this socket
-                        if (($clients[$client_id]['time'] + 10) < time()) {
+                        if (($clients[$client_id]['time'] + GSMTP_TIMEOUT) < time()) {
                             log_line("[$client_id] Timed Out! state:" . $clients[$client_id]['state'], 1);
                             // nothing read for over 10 sec, TIMEOUT!
-                            kill_client($client_id, $clients, $read, '421 ' . SMTP_HOST_NAME .
+                            kill_client($client_id, $clients, $read, '421 ' . GSMTP_HOST_NAME .
                                 ': SMTP command timeout - closing connection');
 
                         }
@@ -564,8 +585,8 @@ for (;; ) {
                                     $address = '';
                                     $port = '';
                                     socket_getpeername($clients[$client_id]['socket'], $address, $port);
-                                    $clients[$client_id]['response'] = '250-' . SMTP_HOST_NAME . ' Hello ' . trim($temp[1]) .
-                                        '[' . $address . ']' . "\r\n" . "250-SIZE 131072\r\n" . //"250-PIPELINING\r\n" .
+                                    $clients[$client_id]['response'] = '250-' . GSMTP_HOST_NAME . ' Hello ' . trim($temp[1]) .
+                                        '[' . $address . ']' . "\r\n" . "250-SIZE ".GSMTP_MAX_SIZE."\r\n" . //"250-PIPELINING\r\n" .
                                         //"250-AUTH PLAIN LOGIN\r\n" .
                                     //"250-STARTTLS\r\n" .
                                     "250 HELP";
@@ -576,6 +597,7 @@ for (;; ) {
                                         $clients[$client_id]['rcpt_to'] = $input;
                                         $clients[$client_id]['response'] = '250 Accepted';
                                     } else {
+										// do not let CC
                                         kill_client($client_id, $clients, $read,
                                             '550 Requested action not taken: mailbox unavailable');
                                     }
@@ -675,8 +697,8 @@ for (;; ) {
                             Be prepared to even only be able to read/write a single byte.
                             */
                             $len = socket_write($sock, $clients[$client_id]['write_buffer'], 
-                                                    strlen($clients[$client_id]['write_buffer'])); // we have bufffered a response?
-                            
+                                        strlen($clients[$client_id]['write_buffer'])); // we have bufffered a response?
+
                             if ($len) {
                                 $address = '';
                                 $port = '';
@@ -699,7 +721,7 @@ for (;; ) {
 
             } // end while
             // Close the client (child) socket
-            
+
             if (is_resource($master_socket)) {
                 socket_shutdown($master_socket, 2);
                 socket_close($master_socket);
@@ -707,7 +729,6 @@ for (;; ) {
             exit();
         }
 }
-
 
 
 /**
@@ -728,7 +749,7 @@ function kill_client($client_id, &$clients, &$read, $msg = null)
         if (is_resource($clients[$client_id]['socket'])) {
             close_client($clients[$client_id]['socket'], $msg);
             $client_count--;
-            log_line("client killed [".$clients[$client_id]['address']."]", 1);
+            log_line("client killed [" . $clients[$client_id]['address'] . "]", 1);
         }
         unset($clients[$client_id]);
 
@@ -836,7 +857,7 @@ function save_email($email)
     $struct = mailparse_msg_get_structure($mimemail);
     $parts = array();
     $body = '';
-    
+
     // Find the body of the email, decode it and change to UTF-8
     // If a message has a html and text part, use the html part
     foreach ($struct as $part_id) {
@@ -908,28 +929,38 @@ function save_email($email)
     $subject = @iconv_mime_decode($subject, 1, 'UTF-8');
 
 
-
     list($mail_user, $mail_host) = explode('@', $to);
     $GM_ALLOWED_HOSTS = explode(',', GM_ALLOWED_HOSTS);
-    // // put the email in....
+    
+    /*
+    What is $spam_score? Earlier versions used spamd (Spam Assasin)
+    to check the spam score of an email. Email the author if you are
+    interested in this.
+    */
 
     if (in_array($mail_host, $GM_ALLOWED_HOSTS) && ($spam_score < 5.1)) {
 
         $to = $mail_user . '@' . GM_PRIMARY_MAIL_HOST; // change it to the primary host
 
-        if (array_pop(explode('@', $recipient)) !== 'sharklasers.com') {
-            
-            $user = array_shift(explode('@', $recipient));
-            $sql = "SELECT * FROM `gm2_address` WHERE `address_email`='" . $user .
-                "@guerrillamailblock.com' ";
-            $result = mysql_query($sql);
-            if (mysql_num_rows($result) == 0) {
-                //die('No such address');
+        if (GSMTP_VERIFY_USERS) {
+            // Here we can verify that the recipient is actually in the database.
+            // Note that guerrillamail.com does not do this - you can send email
+            // to a non-existing email address, and set to this email later.
+            // just an example:
+            if (array_pop(explode('@', $recipient)) !== 'sharklasers.com') {
+                // check the user againts our user database
+                $user = array_shift(explode('@', $recipient));
+                $sql = "SELECT * FROM `gm2_address` WHERE `address_email`='" .
+                    mysql_real_escape_string($user) . "@guerrillamailblock.com' ";
+                $result = mysql_query($sql);
+                if (mysql_num_rows($result) == 0) {
+                    return; // no such address
+                }
             }
         }
 
         $hash = md5($to . $from . $subject . $body); // generate an id for the email
-        
+
         mysql_query("Lock tables " . GM_MAIL_TABLE . " write, gm2_setting write");
 
         $sql = "INSERT INTO " . GM_MAIL_TABLE .
@@ -949,7 +980,7 @@ function save_email($email)
 
     }
     log_line('save_email() called, to:[' . $recipient . '] ID:' . $id);
-    
+
     mailparse_msg_free($mimemail); // very important or else the server will leak memory
     return array($hash, $recipient);
 }

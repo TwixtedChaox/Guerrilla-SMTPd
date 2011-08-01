@@ -23,9 +23,10 @@ connection every time.
 
 So, how did we eliminate this bottleneck? Conveniently, PHP has a socket 
 library which means we can use PHP to write a simple and efficient SMTP server.
-The PHP server runs as a daemon, so it doesn't need to launch a new process for
-each incoming email. It also doesn't need to run and insane amount of checks 
-for each connection.
+If the server runs as a daemon, then the system doesn't need to launch a new 
+process for each incoming email. It also doesn't need to run and insane amount 
+of checks for each connection (eg, NS Lookups, white-lists, black-lists, SPF
+domain keys, Spam Assasin, etc).
 
 We only need to open a single database connection and a single process can be 
 re-used indefinitely. The PHP server is able to multiplex simultaneous 
@@ -95,12 +96,16 @@ Here is an example of /home/user/startsmtpd which will start the smtpd
 in the background:
 
 #!/bin/bash
-php /home/user/smtpd.php -l /home/user/log.txt -v &
+/usr/bin/nohup php /home/user/smtpd.php -l /home/user/log.txt & > /dev/null
 
 Save the 2 lines above in to a file named startsmtpd
-and then do: chmod 755 startsmtpd
+and then do: 
+$[]chmod 755 startsmtpd
 
+You may also place /home/user/startsmtpd in /etc/rc.local so that the
+server starts when the server boots up.
 
+(Note: /usr/bin/nohup ensures that smtpd.php stays running in the background)
 
 Database Schema:
 
