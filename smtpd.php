@@ -197,7 +197,7 @@ define('GSMTP_VERBOSE', $verbose);
 
 define('MYSQL_HOST', 'localhost');
 define('MYSQL_USER', 'gmail_mail');
-define('MYSQL_PASS', 'y/b9rg26D=9A');
+define('MYSQL_PASS', 'ok');
 define('MYSQL_DB', 'gmail_mail');
 
 define('GM_MAIL_TABLE', 'new_mail'); // MySQL table for storage
