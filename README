@@ -66,7 +66,7 @@ http://www.php.net/manual/en/book.iconv.php
 - Setup your MySQL database (schema below)
 
 - Start on the command line like this:
-root@server[] php smtpd.php -l log.txt &
+root@server[] php smtpd.php -l log.txt
 Arguments
 -p Specify the port number
 -v Verbose output to the console
@@ -91,13 +91,16 @@ if (!$running) {
 die();
 
 
-Here is an example of /home/user/startsmtpd
+Here is an example of /home/user/startsmtpd which will start the smtpd
+in the background:
 
 #!/bin/bash
 php /home/user/smtpd.php -l /home/user/log.txt -v &
 
 Save the 2 lines above in to a file named startsmtpd
 and then do: chmod 755 startsmtpd
+
+
 
 Database Schema:
 
