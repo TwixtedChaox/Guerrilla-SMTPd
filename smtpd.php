@@ -208,10 +208,10 @@ if (file_exists(dirname(__file__) . '/smtpd-config.php')) {
     define('GSMTP_HOST_NAME', 'guerrillamail.com');
     define('GSMTP_LOG_FILE', $log_file);
     define('GSMTP_VERBOSE', $verbose);
-    define('GSTMP_TIMEOUT', 10); // how many seconds before timeout.
+    define('GSMTP_TIMEOUT', 10); // how many seconds before timeout.
     define('MYSQL_HOST', 'localhost');
     define('MYSQL_USER', 'gmail_mail');
-    define('MYSQL_PASS', 'y/b9rg26D=9A');
+    define('MYSQL_PASS', 'ok');
     define('MYSQL_DB', 'gmail_mail');
 
     define('GM_MAIL_TABLE', 'new_mail'); // MySQL table for storage
@@ -597,7 +597,7 @@ for (;; ) {
                                         $clients[$client_id]['rcpt_to'] = $input;
                                         $clients[$client_id]['response'] = '250 Accepted';
                                     } else {
-										// do not let CC
+                                        // do not let CC. 
                                         kill_client($client_id, $clients, $read,
                                             '550 Requested action not taken: mailbox unavailable');
                                     }
