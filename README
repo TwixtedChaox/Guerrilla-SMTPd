@@ -15,7 +15,7 @@ Originally, Guerrilla Mail was running the Exim mail server, and the emails
 were fetched using POP.
 
 This proved to be inefficient and unreliable, so the system was replaced in 
-favour of piping the emails directly in to a PHP script.
+favor of piping the emails directly in to a PHP script.
 
 Soon, the piping solution  became a problem too; it required a new process to 
 be started for each arriving email, and it also required a new database 
@@ -26,7 +26,7 @@ library which means we can use PHP to write a simple and efficient SMTP server.
 If the server runs as a daemon, then the system doesn't need to launch a new 
 process for each incoming email. It also doesn't need to run and insane amount 
 of checks for each connection (eg, NS Lookups, white-lists, black-lists, SPF
-domain keys, Spam Assasin, etc).
+domain keys, Spam Assassin, etc).
 
 We only need to open a single database connection and a single process can be 
 re-used indefinitely. The PHP server is able to multiplex simultaneous 
@@ -52,7 +52,8 @@ be performed by a separate program.
 
 TO DO: Forking. The parent could fork the worker child and watch the worker.
 Then re-start the worker if it dies. Currently, the server is able to
-multiplex connextions, so forking is not really necessary.
+multiplex connections, so forking is not really necessary.
+
 
 HOW TO USE / Installation:
 
