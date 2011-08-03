@@ -2,143 +2,23 @@
 
 /*
 
+##############################################
 Guerrilla SMTPd
+Copyright 2011
 
 An SMTP server written in PHP, optimized for receiving email and storing in 
 MySQL. Written for GuerrillaMail.com which processes thousands of emails
 every hour.
-
-Copyright 2011
+Version: 1.1
 Author: Clomode
 Contact: flashmob@gmail.com
 License: GPL (GNU General Public License, v3)
+Repository: https://github.com/flashmob/Guerrilla-SMTPd
+Site: http://www.guerrillamail.com/
 
-Why do we need this?
+See README for more details
+###############################################
 
-Originally, Guerrilla Mail was running the Exim mail server, and the emails
-were fetched using POP.
-
-This proved to be inefficient and unreliable, so the system was replaced in 
-favour of piping the emails directly in to a PHP script.
-
-Soon, the piping solution  became a problem too; it required a new process to 
-be started for each arriving email, and it also required a new database 
-connection every time. 
-
-So, how did we eliminate this bottleneck? Conveniently, PHP has a socket 
-library which means we can use PHP to write a simple and efficient SMTP server.
-If the server runs as a daemon, then the system doesn't need to launch a new 
-process for each incoming email. It also doesn't need to run and insane amount 
-of checks for each connection (eg, NS Lookups, white-lists, black-lists, SPF
-domain keys, Spam Assasin, etc).
-
-We only need to open a single database connection and a single process can be 
-re-used indefinitely. The PHP server is able to multiplex simultaneous 
-connections, and it can pass the email directly to the MySQL database as soon 
-as it is received.
-
-So now we can receive, process and store email all in the one process.
-The performance improvement has been dramatic. 
-
-The purpose of this daemon is to grab the email, save it to the database
-and disconnect as quickly as possible.
-
-Only simple MIME processing of the email is performed:
-- For each email, the header is parsed to determine if the email intended for
-the domains serviced. (You wouldn't believe how many spammers do this!)
-- For each email, the body of the email is identified, decoded and converted
-to UTF-8.
-
-This server does attempt to filter HTML, check for spam or do any sender 
-verification. These steps should be performed by other programs.
-The server does NOT send any email including bounces. Again, this should
-be performed by a separate program.
-
-TO DO: Forking. The parent could fork the worker child and watch the worker.
-Then re-start the worker if it dies. Currently, the server is able to
-multiplex connextions, so forking is not really necessary.
-
-HOW TO USE / Installation:
-
-- Since the server needs to use port 25, make sure to start as root/admin
-- Ensure that your PHP has mb_string and mailparse extensions enabled.
-also requires php sockets, iconv
-http://php.net/manual/en/book.mailparse.php
-http://www.php.net/manual/en/book.mbstring.php
-http://www.php.net/manual/en/book.iconv.php
-- Modify the 'Configuration' section in this script
-- Ensure that no other server is listening on port 25
-- Setup your MySQL database (schema below)
-
-- Start on the command line like this:
-root@server[] php smtpd.php -l log.txt
-Arguments
--p Specify the port number
--v Verbose output to the console
--l log to this file. If no file specified, will log to ./log.txt
-
-Finally, the server may fail from time to time.
-It would need to be checked periodically and re-started if required
-
-// Here is a simple script which can be placed on a cron job:
-// (modify for your purposes)
-/*
-@exec ('ps aux | grep loop', $output, $ret_var);
-foreach ($output as $line) {
-        if (strpos($line, 'smtpd.php')!==false) {
-                $running = true;
-                break;
-        }
-}
-if (!$running) {
-        @exec ('sh /home/user/startsmtpd');
-}
-die();
-
-
-Here is an example of /home/user/startsmtpd which will start the smtpd
-in the background:
-
-#!/bin/bash
-/usr/bin/nohup php /home/user/smtpd.php -l /home/user/log.txt & > /dev/null
-
-Save the 2 lines above in to a file named startsmtpd
-and then do: 
-$[]chmod 755 startsmtpd
-
-You may also place /home/user/startsmtpd in /etc/rc.local so that the
-server starts when the server boots up.
-
-(Note: /usr/bin/nohup ensures that smtpd.php stays running in the background)
-
-Database Schema:
-
-CREATE TABLE IF NOT EXISTS `new_mail` (
-  `mail_id` int(11) NOT NULL auto_increment,
-  `date` datetime NOT NULL,
-  `from` varchar(128) NOT NULL,
-  `to` varchar(128) NOT NULL,
-  `subject` varchar(255) character set utf8 NOT NULL,
-  `body` text character set utf8 NOT NULL,
-  `charset` varchar(32) NOT NULL,
-  `mail` text NOT NULL,
-  `spam_score` float NOT NULL,
-  `hash` char(32) NOT NULL,
-  `content_type` varchar(64) NOT NULL,
-  `recipient` varchar(128) NOT NULL,
-  PRIMARY KEY  (`mail_id`),
-  KEY `to` (`to`),
-  KEY `hash` (`hash`),
-  KEY `date` (`date`)
-) ENGINE=InnoDB  DEFAULT CHARSET=UTF-8;
-
-
-Special Thanks to the authors of these pages:
-http://devzone.zend.com/article/1086
-http://www.greenend.org.uk/rjk/2000/05/21/smtp-replies.html
-http://pleac.sourceforge.net/pleac_php/processmanagementetc.html
-http://www.tuxradar.com/practicalphp/16/1/6
-http://www.freesoft.org/CIE/RFC/1123/92.htm
 */
 // typically, this value should be set in php.ini, PHP may ignore it here!
 ini_set('memory_limit', '512M');
@@ -231,14 +111,50 @@ if (file_exists(dirname(__file__) . '/smtpd-config.php')) {
 # Configuration end
 ##############################################################
 
-$jb_mysql_link = mysql_connect(MYSQL_HOST, MYSQL_USER, MYSQL_PASS) or $DB_ERROR =
+/**
+ * Returns a connection to MySQL
+ * Returns the existing connection, if a connection was opened before.
+ * On the consecutive call, It will ping MySQL if not called for 
+ * the last 60 seconds to ensure that the connection is up.
+ * Will attempt to reconnect once if the
+ * connection is not up.
+ * 
+ * @param bool $reconnect True if you want the link to re-connect
+ */
+function &get_mysql_link($reconnect=false) {
+    
+    static $link;
+    global $DB_ERROR;
+    static $last_get_time;
+    if (isset($last_get_time)) {
+        // more than a minute ago?
+        if (($last_get_time+60) < time()) {         
+            if (false === mysql_ping($link)) {
+                $reconnect = true; // try to reconnect
+            }
+        }
+    }
+    $last_get_time = time();
+    
+    if (isset($link) && !$reconnect) return $link;
+    
+    $DB_ERROR = '';
+    $link = mysql_connect(MYSQL_HOST, MYSQL_USER, MYSQL_PASS) or $DB_ERROR =
     "Couldn't connect to server.";
-mysql_select_db(MYSQL_DB, $jb_mysql_link) or $DB_ERROR =
+mysql_select_db(MYSQL_DB, $link) or $DB_ERROR =
     "Couldn't select database.";
 mysql_query("SET NAMES utf8");
 
+    if ($DB_ERROR) {
+        log_line($DB_ERROR, 1);
+        return false;
+    }
+    
+    return $link;
+    
+    
+}
 
-log_line($DB_ERROR, 1);
 
 /**
  * error_handler()
@@ -380,6 +296,11 @@ function log_line($l, $log_level = 2)
 ###############################################################
 # Guerrilla SMTPd, Main
 
+// Check MySQL connection
+
+if (get_mysql_link()===false) {
+    die('Please check your MySQL settings');
+}
 // Create a TCP Stream socket
 /*
 $master_sock = socket_create(AF_INET, SOCK_STREAM, 0);
@@ -842,6 +763,7 @@ function extract_from_email($str)
  */
 function save_email($email)
 {
+    
 
     global $listen_port;
     $mimemail = null;
@@ -939,6 +861,12 @@ function save_email($email)
     */
 
     if (in_array($mail_host, $GM_ALLOWED_HOSTS) && ($spam_score < 5.1)) {
+        
+        $mysql_link = get_mysql_link();
+        if ($mysql_link===false) {
+            // could not get a db connection
+            return array(false, false);
+        }
 
         $to = $mail_user . '@' . GM_PRIMARY_MAIL_HOST; // change it to the primary host
 
@@ -974,8 +902,12 @@ function save_email($email)
 
         mysql_query($sql) or log_line(mysql_error());
         $id = mysql_insert_id();
-        $sql = "UPDATE gm2_setting SET `setting_value` = `setting_value`+1 WHERE `setting_name`='received_emails' LIMIT 1";
-        mysql_query($sql);
+        if ($id) {
+            $sql = "UPDATE gm2_setting SET `setting_value` = `setting_value`+1 WHERE `setting_name`='received_emails' LIMIT 1";
+            mysql_query($sql);
+        } else {
+            log_line('Failed to save email From:'.$from.' To:'.$recipient, 1);
+        }
         mysql_query("UNLOCK TABLES");
 
     }
