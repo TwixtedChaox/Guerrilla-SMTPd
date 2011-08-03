@@ -9,7 +9,7 @@ Copyright 2011
 An SMTP server written in PHP, optimized for receiving email and storing in 
 MySQL. Written for GuerrillaMail.com which processes thousands of emails
 every hour.
-Version: 1.1
+Version: 1.1.1
 Author: Clomode
 Contact: flashmob@gmail.com
 License: GPL (GNU General Public License, v3)
@@ -78,14 +78,17 @@ if (!isset($verbose)) {
 # Configuration start
 ##############################################################
 
+
 if (file_exists(dirname(__file__) . '/smtpd-config.php')) {
     // place a copy of the define statements in to smtpd-config.php
     require_once (dirname(__file__) . '/smtpd-config.php');
 } else {
     // defaults if smtpd-config.php is not available
+    
+
     define('MAX_SMTP_CLIENTS', 400);
     define('GSMTP_MAX_SIZE', 131072);
-    define('GSMTP_HOST_NAME', 'guerrillamail.com');
+    define('GSMTP_HOST_NAME', 'guerrillamail.com'); // This should also be set to reflect your RDNS
     define('GSMTP_LOG_FILE', $log_file);
     define('GSMTP_VERBOSE', $verbose);
     define('GSMTP_TIMEOUT', 10); // how many seconds before timeout.
@@ -296,6 +299,8 @@ function log_line($l, $log_level = 2)
 ###############################################################
 # Guerrilla SMTPd, Main
 
+$GM_ALLOWED_HOSTS = explode(',', GM_ALLOWED_HOSTS);
+
 // Check MySQL connection
 
 if (get_mysql_link()===false) {
@@ -485,8 +490,8 @@ for (;; ) {
                     $input = '';
                     switch ($clients[$client_id]['state']) {
                         case 0:
-                            $clients[$client_id]['response'] = '220 ' . $host_name . ' SMTP Service at ' .
-                                date('r');
+                            $clients[$client_id]['response'] = '220 ' . GSMTP_HOST_NAME . ' SMTP Guerrilla-SMTPd #'.$client_id.' ('.$client_count.'), ' .
+                                gmdate('r');
                             $clients[$client_id]['state'] = 1;
 
                             break;
@@ -499,25 +504,27 @@ for (;; ) {
 
                                 if (strpos($input, 'HELO') !== false) {
                                     $temp = explode(' ', $input);
-                                    $clients[$client_id]['response'] = '250 Hello ' . trim($temp[1]) .
-                                        ', I am glad to meet you';
+                                    $clients[$client_id]['response'] = '250 '.GSMTP_HOST_NAME.' Hello ' . trim($temp[1]) .
+                                        ' ['.$clients[$client_id]['address'].'], got some spam for me?';
                                 } elseif (strpos($input, 'EHLO') !== false) {
                                     $temp = explode(' ', $input);
                                     $address = '';
                                     $port = '';
-                                    socket_getpeername($clients[$client_id]['socket'], $address, $port);
+                                    
                                     $clients[$client_id]['response'] = '250-' . GSMTP_HOST_NAME . ' Hello ' . trim($temp[1]) .
-                                        '[' . $address . ']' . "\r\n" . "250-SIZE ".GSMTP_MAX_SIZE."\r\n" . //"250-PIPELINING\r\n" .
+                                        '[' . $clients[$client_id]['address'] . ']' . "\r\n" . "250-SIZE ".GSMTP_MAX_SIZE."\r\n" . //"250-PIPELINING\r\n" .
                                         //"250-AUTH PLAIN LOGIN\r\n" .
                                     //"250-STARTTLS\r\n" .
                                     "250 HELP";
                                 } elseif (strpos($input, 'MAIL FROM:') !== false) {
                                     $clients[$client_id]['response'] = '250 Ok';
-                                } elseif (strpos($input, 'RCPT TO:') !== false) {
-                                    if (empty($clients[$client_id]['rcpt_to'])) {
+                                } elseif ((strpos($input, 'RCPT TO:') !== false)) {
+                                    $email = extract_email($input);
+                                    if (empty($clients[$client_id]['rcpt_to']) && ($email)) {
                                         $clients[$client_id]['rcpt_to'] = $input;
                                         $clients[$client_id]['response'] = '250 Accepted';
                                     } else {
+                                        log_line('mailbox unavailable['.array_pop(explode('@',$input)).'] input:'.$input, 1);
                                         // do not let CC. 
                                         kill_client($client_id, $clients, $read,
                                             '550 Requested action not taken: mailbox unavailable');
@@ -852,7 +859,8 @@ function save_email($email)
 
 
     list($mail_user, $mail_host) = explode('@', $to);
-    $GM_ALLOWED_HOSTS = explode(',', GM_ALLOWED_HOSTS);
+    
+    global $GM_ALLOWED_HOSTS; // allowed hosts
     
     /*
     What is $spam_score? Earlier versions used spamd (Spam Assasin)
