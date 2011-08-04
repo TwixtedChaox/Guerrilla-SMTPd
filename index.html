@@ -11,7 +11,7 @@
   <style type="text/css">
     body {
       margin-top: 1.0em;
-      background-color: #e80b08;
+      background-color: #000000;
       font-family: Helvetica, Arial, FreeSans, san-serif;
       color: #ffffff;
     }
@@ -52,8 +52,14 @@
       SMTP server made for receiving large volume of mail.
     </div>
 
-    <p>Guerrilla SMTPd is an SMTP mail server, made with the goal of receiving large volumes of email. So far, it has been interesting experiment to see what PHP can do. It's currently used on www.guerrillamail.com</p><h2>Dependencies</h2>
-<p>Needs PHP with the socket library enabled. Also needs mb_string and mail parse extension</p>
+    <p>Guerrilla SMTPd is an SMTP mail server, made with the goal of receiving large volumes of email. So far, it has been interesting experiment to see what PHP can do. It's currently used on www.guerrillamail.com</p>
+	<h2>Demo</h2>
+	<div>
+	<p>Click the 'About' tab to view the stats - it shows show how many emails go in every hour.</p>
+	<iframe src="http://www.guerrillamail.com/m/" width="340" height="600" frameborder=0></iframe></div>
+
+	<h2>Dependencies</h2>
+<p>Needs PHP with the socket library enabled. Also needs Mb_string and Mailparse extensions</p>
 <h2>Install</h2>
 <p>See readme file</p>
 <h2>License</h2>
