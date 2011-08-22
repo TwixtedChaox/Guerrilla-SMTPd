@@ -689,7 +689,15 @@ function kill_client($client_id, &$clients, &$read, $msg = null)
 }
 #########################################################################################
 # Mail Parsing and storage to MySQL
+/**
+ * Use php's ability to set an error handler, since iconv may sometimes give
+ * warnings. this allows us to trap these warnings
+ */
+function iconv_error_handler($errno, $errstr, $errfile, $errline) {
+	global $iconv_error;
+	$iconv_error = true;
 
+}
 /**
  * mail_body_decode()
  * Decode the mail body to binary. Then convert to UTF-8 if not already
@@ -700,6 +708,8 @@ function kill_client($client_id, &$clients, &$read, $msg = null)
  */
 function mail_body_decode($str, $encoding_type, $charset = 'UTF-8')
 {
+	global $iconv_error;
+	$iconv_error=false;
 
     if ($encoding_type == 'base64') {
         $str = base64_decode($str);
@@ -708,7 +718,15 @@ function mail_body_decode($str, $encoding_type, $charset = 'UTF-8')
     }
 
     if (strtoupper($charset) != 'UTF-8') {
+		$old_error_handler = set_error_handler("iconv_error_handler");
         $str = @iconv(strtoupper($charset), 'UTF-8', $str);
+		if ($iconv_error) {
+			// there was iconv error
+			// attempt mbstring concersion
+			$str = mb_convert_encoding($str, 'UTF-8', $charset);
+			return $str;			
+		}
+		restore_error_handler();
     }
     return $str;
 
@@ -775,6 +793,7 @@ function save_email($email)
     global $listen_port;
     $mimemail = null;
     $spam_score = '';
+	$email .= "\r\n";
 
     $mimemail = mailparse_msg_create(); // be sure to free this for each email to avoid memory leaks
     if ($listen_port == 2525) {
@@ -822,7 +841,7 @@ function save_email($email)
             $body = substr($email, $start, $end - $start);
             $body = mail_body_decode($body, $transfer_encoding, $charset);
             $content_type = $parts[$part_id]['content-type'];
-            if (trim($body)) {
+            if ($body=trim($body)) {
                 break; // exit the foreach - use this one
             }
         } elseif ($parts[$part_id]['content-type'] == 'text/plain') {
