@@ -9,7 +9,7 @@ Copyright 2011
 An SMTP server written in PHP, optimized for receiving email and storing in 
 MySQL. Written for GuerrillaMail.com which processes thousands of emails
 every hour.
-Version: 1.2
+Version: 1.2.1
 Author: Clomode
 Contact: flashmob@gmail.com
 License: GPL (GNU General Public License, v3)
@@ -321,7 +321,7 @@ socket_listen($master_sock);
 */
 
 $clients = array();
-$killed_clients = array();
+
 
 while (true) {
     // Loop until we acquire a socket
@@ -487,6 +487,11 @@ for (;; ) {
 
                 foreach ($clients as $client_id => $client) {
 
+					if (!empty($clients[$client_id]['kill_time'])) {
+						// client is being killed
+						continue;
+					}
+
                     if (is_resource($clients[$client_id]['socket'])) {
                         // place the socket on the reading list
                         $read[$client_id] = $clients[$client_id]['socket']; // we want to read this socket
@@ -498,8 +503,8 @@ for (;; ) {
                     $input = '';
                     switch ($clients[$client_id]['state']) {
                         case 0:
-							global $killed_clients;
-                            $clients[$client_id]['response'] = '220 ' . GSMTP_HOST_NAME . ' SMTP Guerrilla-SMTPd #'.$client_id.' ('.sizeof($clients).','.sizeof($killed_clients).'), ' .
+							
+                            $clients[$client_id]['response'] = '220 ' . GSMTP_HOST_NAME . ' SMTP Guerrilla-SMTPd #'.$client_id.' ('.sizeof($clients).') ' .
                                 gmdate('r');
                             $clients[$client_id]['state'] = 1;
 
@@ -611,6 +616,11 @@ for (;; ) {
                 foreach ($clients as $client_id => $client) {
                     // buld a list of sockets that need writing
 
+					if (!empty($clients[$client_id]['kill_time'])) {
+						// client is being killed
+						continue;
+					}
+
                     if (!is_resource($client['socket'])) {
                         kill_client($client_id, $clints, $read, '');
                         continue;
@@ -676,7 +686,7 @@ for (;; ) {
 
 /**
  * kill_client()
- * Move the client to the $killed_clients list
+ * 
  * @param int $client_id
  * @param array $clients
  * @param array $read
@@ -685,24 +695,19 @@ for (;; ) {
  */
 function kill_client($client_id, &$clients, &$read, $msg = null)
 {
-    
-	global $killed_clients;
-
+    	
     if (isset($clients[$client_id])) {
 
-		$killed_clients[$client_id] = $clients[$client_id]; // move
-		$killed_clients['kill_time'] = time();
+		$clients[$client_id]['kill_time'] = time();
 		if (strlen($msg) > 0) {
 			if (substr($msg, -2) !== "\r\n") {
 				$msg .= "\r\n";
 			}
 			// there may be some other data on the buffer so we append the msg
-			$killed_clients[$client_id]['write_buffer'] .= $msg;
+			$clients[$client_id]['write_buffer'] .= $msg;
 		}
 
-       // remove from the clients
-
-        unset($clients[$client_id]);
+       // remove from the clients to read
         unset($read[$client_id]);
 
     }
@@ -710,27 +715,31 @@ function kill_client($client_id, &$clients, &$read, $msg = null)
 }
 /**
  * kill_client()
- * Process $killed_clients list. Write out the remaining lines from the buffer
+ * Process $clients list. Write out the remaining lines from the buffer
  * and close the socket when there are no more chars to write or the
  * socket was closed by the other side
  */
 function process_killed_clients() {
-	global $killed_clients;
+	global $clients;
 	global $client_count;
-	foreach ($killed_clients as $client_id => $client) {
+	foreach ($clients as $client_id => $client) {
+
+		if (empty($client['kill_time'])) {
+			continue;
+		}
 
 		if (!is_resource($client['socket'])) {
 
 			$client_count--;
-			unset($killed_clients[$client_id]);
+			unset($clients[$client_id]);
 			continue;
 		}
 
-		if (($killed_clients['kill_time'] + 60) < time()) { // was on the kill list too long!
+		if (($client['kill_time'] + 60) < time()) { // was on the kill list too long!
 			// timeout
 			close_client($client['socket']);
 			$client_count--;
-			unset($killed_clients[$client_id]);
+			unset($clients[$client_id]);
 			continue;
 
 		}
@@ -740,24 +749,24 @@ function process_killed_clients() {
 			$len = socket_write($client['socket'], $client['write_buffer'], 
                                         strlen($client['write_buffer']));
 			if ($len) {
-				$killed_clients[$client_id]['write_buffer'] = substr($client['write_buffer'],
+				$clients[$client_id]['write_buffer'] = substr($client['write_buffer'],
                                    $len);
 			}
 			if ($len===false) {
 				close_client($client['socket']);
 				$client_count--;
-				unset($killed_clients[$client_id]);
+				unset($clients[$client_id]);
 				continue;
 			}
 
 		}
-		if (strlen($killed_clients[$client_id]['write_buffer'])==0) {
+		if (strlen($clients[$client_id]['write_buffer'])==0) {
 			if (is_resource($client['socket'])) {
 				close_client($client['socket']);			
 				log_line("client killed [" . $client['address'] . "]", 1);
 			}
 			$client_count--;
-			unset($killed_clients[$client_id]);
+			unset($clients[$client_id]);
 		}
 
 	}
