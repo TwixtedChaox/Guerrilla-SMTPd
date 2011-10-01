@@ -9,7 +9,7 @@ Copyright 2011
 An SMTP server written in PHP, optimized for receiving email and storing in 
 MySQL. Written for GuerrillaMail.com which processes thousands of emails
 every hour.
-Version: 1.2.1
+Version: 1.2.3
 Author: Clomode
 Contact: flashmob@gmail.com
 License: GPL (GNU General Public License, v3)
@@ -26,6 +26,16 @@ and making sure they have a chance to output their last message before being
 closed.
 - Added 'received' headers to saved mail
 
+1.2.1
+- optimizations
+- server goes back to the command state after saving mail
+
+1.2.2
+- max clients wasn't checked correctly
+- Adjusted main loop so that client killing gets processed on each iteration
+- reduced timeout for clients on the kill list
+- removed dead code
+
 ###############################################
 
 */
@@ -33,7 +43,8 @@ closed.
 ini_set('memory_limit', '512M');
 
 // needed for trapping unix signals
-declare (ticks = 1);
+declare (ticks = 1)
+    ;
 
 // It's a daemon! We should not exit... A warning though:
 // PHP does have memory leaks and you may need to have another script to
@@ -68,10 +79,10 @@ if (!isset($listen_port)) {
 }
 if (isset($log_file)) {
 
-    if (!file_exists($log_file) && file_exists(dirname(__FILE__) . '/' . $log_file)) {
-        $log_file = dirname(__FILE__) . '/' . $log_file;
+    if (!file_exists($log_file) && file_exists(dirname(__file__) . '/' . $log_file)) {
+        $log_file = dirname(__file__) . '/' . $log_file;
     } else {
-        $log_file = dirname(__FILE__) . '/log.txt';
+        $log_file = dirname(__file__) . '/log.txt';
     }
 } else {
 
@@ -88,16 +99,15 @@ if (!isset($verbose)) {
 ##############################################################
 
 
-
-if (file_exists(dirname(__FILE__) . '/smtpd-config.php')) {
+if (file_exists(dirname(__file__) . '/smtpd-config.php')) {
     // place a copy of the define statements in to smtpd-config.php
-    require_once (dirname(__FILE__) . '/smtpd-config.php');
+    require_once (dirname(__file__) . '/smtpd-config.php');
 } else {
     // defaults if smtpd-config.php is not available
-	log_line('Loading defaults',1);
-    
+    log_line('Loading defaults', 1);
 
-    define('MAX_SMTP_CLIENTS', 400);
+
+    define('MAX_SMTP_CLIENTS', 10);
     define('GSMTP_MAX_SIZE', 131072);
     define('GSMTP_HOST_NAME', 'guerrillamail.com'); // This should also be set to reflect your RDNS
     define('GSMTP_LOG_FILE', $log_file);
@@ -135,38 +145,39 @@ if (file_exists(dirname(__FILE__) . '/smtpd-config.php')) {
  * 
  * @param bool $reconnect True if you want the link to re-connect
  */
-function &get_mysql_link($reconnect=false) {
-    
+function &get_mysql_link($reconnect = false)
+{
+
     static $link;
     global $DB_ERROR;
     static $last_get_time;
     if (isset($last_get_time)) {
         // more than a minute ago?
-        if (($last_get_time+60) < time()) {         
+        if (($last_get_time + 60) < time()) {
             if (false === mysql_ping($link)) {
                 $reconnect = true; // try to reconnect
             }
         }
     }
     $last_get_time = time();
-    
-    if (isset($link) && !$reconnect) return $link;
-    
+
+    if (isset($link) && !$reconnect)
+        return $link;
+
     $DB_ERROR = '';
     $link = mysql_connect(MYSQL_HOST, MYSQL_USER, MYSQL_PASS) or $DB_ERROR =
-    "Couldn't connect to server.";
-mysql_select_db(MYSQL_DB, $link) or $DB_ERROR =
-    "Couldn't select database.";
-mysql_query("SET NAMES utf8");
+        "Couldn't connect to server.";
+    mysql_select_db(MYSQL_DB, $link) or $DB_ERROR = "Couldn't select database.";
+    mysql_query("SET NAMES utf8");
 
     if ($DB_ERROR) {
         log_line($DB_ERROR, 1);
         return false;
     }
-    
+
     return $link;
-    
-    
+
+
 }
 
 
@@ -274,7 +285,7 @@ function read_line(&$clients, $client_id)
  */
 function close_client(&$sock)
 {
-    
+
     socket_shutdown($sock, 2);
     socket_close($sock);
 }
@@ -309,16 +320,10 @@ $GM_ALLOWED_HOSTS = explode(',', GM_ALLOWED_HOSTS);
 
 // Check MySQL connection
 
-if (get_mysql_link()===false) {
+if (get_mysql_link() === false) {
     die('Please check your MySQL settings');
 }
-// Create a TCP Stream socket
-/*
-$master_sock = socket_create(AF_INET, SOCK_STREAM, 0);
-// Bind the socket to an address/port
-socket_bind($master_sock, $address, $listen_port) or die('Could not bind to address');
-socket_listen($master_sock);
-*/
+
 
 $clients = array();
 
@@ -337,351 +342,348 @@ while (true) {
 $next_id = 1;
 log_line("Guerrilla Mail Daemon started on port " . $listen_port, 1);
 
-// This is in a for loop so that future versions of this deamon can be forked.
-
-for (;; ) {
-    $newpid = false;
-    //$newpid = pcntl_fork(); // TO DO
-    if ($newpid === -1) {
-        die("Couldn't fork()!");
-    } else
-        if (!$newpid) {
-            // the child
-            //posix_setsid();
-            /* TO DO Accept incoming requests and handle them as child processes */
-
-            $client_count = 0;
-            while (is_resource($master_socket)) {
-
-                // is_resource $master_socket
-                if ($client_count < MAX_SMTP_CLIENTS) {
-                    $read[0] = $master_socket; // socket to poll for accepting new connections
-                }
-                ###################################
-                # READ from the sockets or accept new connections
-                $N = null;
-                if (!empty($read)) {
-
-                    $ready = socket_select($read, $N, $N, null); // are there any sockets need reading?
-                    if ($ready) {
-                        if (in_array($master_socket, $read)) { // new connection?
-                            $new_client = socket_accept($master_socket);
-                            if ($new_client !== false) {
-                                $client_count++;
-
-                                $clients[$next_id]['socket'] = $new_client; // new socket
-                                $clients[$next_id]['state'] = 0;
-                                $clients[$next_id]['mail_from'] = '';
-								$clients[$next_id]['helo'] = '';
-                                $clients[$next_id]['rcpt_to'] = '';
-                                $clients[$next_id]['error_c'] = 0;
-                                $clients[$next_id]['read_buffer'] = '';
-                                $clients[$next_id]['read_buffer_ready'] = false; // true if the buffer is ready to be fetched
-                                $clients[$next_id]['write_buffer'] = '';
-                                $clients[$next_id]['response'] = ''; // response messages are placed here, before they go on the write buffer
-                                $clients[$next_id]['time'] = time();
-                                $address = '';
-                                $port = '';
-                                socket_getpeername($clients[$next_id]['socket'], $address, $port);
-                                $clients[$next_id]['address'] = $address;
-
-                                $next_id++;
-                                log_line('Accepted a new client[' . $next_id . '] (' . $address . ':' . $port .
-                                    ')' . " There are $client_count clients(" . sizeof($clients) . ")", 1);
-                            }
-
-                        }
-
-                        unset($read[0]); // remove the master socket, we do not read it
 
 
-                        # Check each soocket and read from it
-                        foreach ($read as $client_id => $sock) {
-                            if ($listen_port == 2525) {
-                                // For debugging, only when running under port 2525
-                                echo "[$client_id]omn nom nom (" . strlen($clients[$client_id]['read_buffer']) .
-                                    ")\r\n";
-                            }
+while (is_resource($master_socket)) {
 
-                            $buff = socket_read($sock, 1024);
-                            while (true) {
-                                if ($buff === '') {
-                                    // no more to read
+	// is_resource $master_socket
 
-                                    if (($clients[$client_id]['time'] + GSMTP_TIMEOUT) < time()) {
-                                        log_line("[$client_id] Timed Out! state:" . $clients[$client_id]['state'], 1);
-                                        // nothing read for over 10 sec, TIMEOUT!
-                                        kill_client($client_id, $clients, $read, '421 ' . GSMTP_HOST_NAME .
-                                            ': SMTP command timeout - closing connection');
-                                    }
-                                    break;
-                                } elseif ($buff === false) {
-                                    // error
-                                    log_line('[' . $client_id . ']failed to read from:' . socket_strerror(socket_last_error
-                                        ($sock)));
-                                    kill_client($client_id, $clients, $read);
+	if (sizeof($clients) < (MAX_SMTP_CLIENTS)) {
+		$read[0] = $master_socket; // socket to poll for accepting new connections
+	} 
+	###################################
+	# READ from the sockets or accept new connections
+	$N = null;
+	if (!empty($read)) {
+		
+		$ready = socket_select($read, $N, $N, null); // are there any sockets need reading?
+		
+		if ($ready) {
+			if ((sizeof($clients) < MAX_SMTP_CLIENTS) && in_array($master_socket, $read)) { // new connection?
+				$new_client = socket_accept($master_socket);
+				if ($new_client !== false) {
 
-                                    break;
-                                } else {
-                                    // Read the data in to the read buffer
+					$clients[$next_id]['socket'] = $new_client; // new socket
+					$clients[$next_id]['state'] = 0;
+					$clients[$next_id]['mail_from'] = '';
+					$clients[$next_id]['helo'] = '';
+					$clients[$next_id]['rcpt_to'] = '';
+					$clients[$next_id]['error_c'] = 0;
+					$clients[$next_id]['read_buffer'] = '';
+					$clients[$next_id]['read_buffer_ready'] = false; // true if the buffer is ready to be fetched
+					$clients[$next_id]['write_buffer'] = '';
+					$clients[$next_id]['response'] = ''; // response messages are placed here, before they go on the write buffer
+					$clients[$next_id]['time'] = time();
+					$address = '';
+					$port = '';
+					socket_getpeername($clients[$next_id]['socket'], $address, $port);
+					$clients[$next_id]['address'] = $address;
 
-                                    $clients[$client_id]['time'] = time();
-                                    $clients[$client_id]['read_buffer'] .= $buff;
+					$next_id++;
+					log_line('Accepted a new client[' . $next_id . '] (' . $address . ':' . $port .
+						')' . " There are ".sizeof($clients)." clients", 1);
+				}
 
-                                    // Determine if the buffer is ready
-                                    // The are two states when we determine if the buffer is ready.
-                                    // State 1 is the command state, when we wait for a command from
-                                    // the client
-                                    // State 2 is the DATA state, when the client gives is the data
-                                    // for the email.
+			}
 
-                                    if ($clients[$client_id]['state'] === 1) {
-                                        // command state, strings terminate with \r\n
-                                        if (strpos($buff, "\r\n", strlen($buff) - 2) !== false) {
-                                            $clients[$client_id]['read_buffer_ready'] = true;
-                                        }
+			unset($read[0]); // remove the master socket, we do not read it
 
-                                    } elseif ($clients[$client_id]['state'] === 2) {
-                                        // DATA reading state
-                                        // not ready unless you get a \r\n.\r\n at the end
-                                        $len = strlen($clients[$client_id]['read_buffer']);
-                                        if (($len > GSMTP_MAX_SIZE) || (($len > 4) && (strpos($clients[$client_id]['read_buffer'],
-                                            "\r\n.\r\n", $len - 5)) !== false)) {
-                                            $clients[$client_id]['read_buffer_ready'] = true; // finished
-                                            $clients[$client_id]['read_buffer'] = substr($clients[$client_id]['read_buffer'],
-                                                0, $len - 5);
-                                        }
-                                    }
 
-                                    break;
+			# Check each soocket and read from it
+			foreach ($read as $client_id => $sock) {
+				if ($listen_port == 2525) {
+					// For debugging, only when running under port 2525
+					echo "[$client_id]omn nom nom (" . strlen($clients[$client_id]['read_buffer']) .
+						")\r\n";
+				}
 
-                                }
-                            }
-                        }
-                    } else {
-                        // socket select failed for some reason
-                        log_line("socket_select() failed, reason: " . socket_strerror(socket_last_error
-                            ()), 1);
+				$buff = socket_read($sock, 1024);
+				while (true) {
+					if ($buff === '') {
+						// no more to read
 
-                    }
-                }
+						if (($clients[$client_id]['time'] + GSMTP_TIMEOUT) < time()) {
+							log_line("[$client_id] Timed Out! a state:" . $clients[$client_id]['state'], 1);
+							// nothing read for over 10 sec, TIMEOUT!
+							kill_client($client_id, $clients, $read, '421 ' . GSMTP_HOST_NAME .
+								': SMTP command timeout - closing connection');
+						}
+						break;
+					} elseif ($buff === false) {
+						// error
+						log_line('[' . $client_id . ']failed to read from:' . socket_strerror(socket_last_error
+							($sock)));
+						kill_client($client_id, $clients, $read);
 
-                // process timeouts for sockets we didn't read
-                foreach ($clients as $client_id => $client) {
-                    if (!in_array($clients[$client_id]['socket'], $read)) {
-                        // we didn't read any data from this socket
-                        if (($clients[$client_id]['time'] + GSMTP_TIMEOUT) < time()) {
-                            log_line("[$client_id] Timed Out! state:" . $clients[$client_id]['state'], 1);
-                            // nothing read for over 10 sec, TIMEOUT!
-                            kill_client($client_id, $clients, $read, '421 ' . GSMTP_HOST_NAME .
-                                ': SMTP command timeout - closing connection');
+						break;
+					} else {
+						// Read the data in to the read buffer
 
-                        }
-                    }
-                }
+						$clients[$client_id]['time'] = time();
+						$clients[$client_id]['read_buffer'] .= $buff;
 
-                ###################################
-                # Process the protocol state
+						// Determine if the buffer is ready
+						// The are two states when we determine if the buffer is ready.
+						// State 1 is the command state, when we wait for a command from
+						// the client
+						// State 2 is the DATA state, when the client gives is the data
+						// for the email.
 
-                $read = array();
+						if ($clients[$client_id]['state'] === 1) {
+							// command state, strings terminate with \r\n
+							if (strpos($buff, "\r\n", strlen($buff) - 2) !== false) {
+								$clients[$client_id]['read_buffer_ready'] = true;
+							}
 
-                foreach ($clients as $client_id => $client) {
+						} elseif ($clients[$client_id]['state'] === 2) {
+							// DATA reading state
+							// not ready unless you get a \r\n.\r\n at the end
+							$len = strlen($clients[$client_id]['read_buffer']);
+							if (($len > GSMTP_MAX_SIZE) || (($len > 4) && (strpos($clients[$client_id]['read_buffer'],
+								"\r\n.\r\n", $len - 5)) !== false)) {
+								$clients[$client_id]['read_buffer_ready'] = true; // finished
+								$clients[$client_id]['read_buffer'] = substr($clients[$client_id]['read_buffer'],
+									0, $len - 5);
+							}
+						}
 
-					if (!empty($clients[$client_id]['kill_time'])) {
-						// client is being killed
+						break;
+
+					}
+				}
+			}
+		} else {
+			// socket select failed for some reason
+			log_line("socket_select() failed, reason: " . socket_strerror(socket_last_error
+				()), 1);
+
+		}
+	}
+
+	// process timeouts for sockets we didn't read
+	foreach ($clients as $client_id => $client) {
+		if (!empty($clients[$client_id]['kill_time'])) {
+			// client is being killed
+			continue;
+		}
+		if (!in_array($clients[$client_id]['socket'], $read)) {
+			// we didn't read any data from this socket
+			if (($clients[$client_id]['time'] + GSMTP_TIMEOUT) < time()) {
+				log_line("[$client_id] Timed Out! b state:" . $clients[$client_id]['state'], 1);
+				// nothing read for over 10 sec, TIMEOUT!
+				kill_client($client_id, $clients, $read, '421 ' . GSMTP_HOST_NAME .
+					': SMTP command timeout - closing connection');
+
+			}
+		}
+	}
+
+	###################################
+	# Process the protocol state
+
+	$read = array();
+
+	foreach ($clients as $client_id => $client) {
+
+		if (!empty($clients[$client_id]['kill_time'])) {
+			// client is being killed
+			continue;
+		}
+
+		if (is_resource($clients[$client_id]['socket'])) {
+			// place the socket on the reading list
+			$read[$client_id] = $clients[$client_id]['socket']; // we want to read this socket
+		} else {
+			kill_client($client_id, $clients, $read, '');
+			continue; // skip this loop, go to the next client
+		}
+
+		$input = '';
+		switch ($clients[$client_id]['state']) {
+			case 0:
+
+				$clients[$client_id]['response'] = '220 ' . GSMTP_HOST_NAME .
+					' SMTP Guerrilla-SMTPd #' . $client_id . ' (' . sizeof($clients) . ') ' . gmdate('r');
+				$clients[$client_id]['state'] = 1;
+
+				break;
+			case 1:
+
+				$input = read_line($clients, $client_id);
+				if ($input)
+					log_line('[' . $client_id . '] cmd:' . $input);
+				if ($input) {
+
+					if (strpos($input, 'HELO') !== false) {
+						$temp = explode(' ', $input);
+						$clients[$client_id]['helo'] = trim($temp[1]);
+						$clients[$client_id]['response'] = '250 ' . GSMTP_HOST_NAME . ' Hello ' . trim($temp[1]) .
+							' [' . $clients[$client_id]['address'] . '], got some spam for me?';
+					} elseif (strpos($input, 'EHLO') !== false) {
+						$temp = explode(' ', $input);
+						$address = '';
+						$port = '';
+						$clients[$client_id]['helo'] = trim($temp[1]);
+						$clients[$client_id]['response'] = '250-' . GSMTP_HOST_NAME . ' Hello ' . trim($temp[1]) .
+							'[' . $clients[$client_id]['address'] . ']' . "\r\n" . "250-SIZE " .
+							GSMTP_MAX_SIZE . "\r\n" . //"250-PIPELINING\r\n" .
+							//"250-AUTH PLAIN LOGIN\r\n" .
+						//"250-STARTTLS\r\n" .
+						"250 HELP";
+					} elseif (strpos($input, 'MAIL FROM:') !== false) {
+						$clients[$client_id]['response'] = '250 Ok';
+					} elseif ((strpos($input, 'RCPT TO:') !== false)) {
+						$email = extract_email($input);
+						if (empty($clients[$client_id]['rcpt_to']) && ($email)) {
+							$clients[$client_id]['rcpt_to'] = $input;
+							$clients[$client_id]['response'] = '250 Accepted';
+						} else {
+							log_line('mailbox unavailable[' . array_pop(explode('@', $input)) . '] input:' .
+								$input, 1);
+							// do not let CC.
+							kill_client($client_id, $clients, $read,
+								'550 Requested action not taken: mailbox unavailable');
+						}
+
+						$clients[$client_id]['response'] = '250 Accepted';
+					} elseif (strpos($input, 'DATA') !== false) {
+						$clients[$client_id]['response'] =
+							'354 Enter message, ending with "." on a line by itself';
+						$clients[$client_id]['state'] = 2;
+
+						$clients[$next_id]['read_buffer'] = '';
+					} elseif (strpos($input, 'QUIT') !== false) {
+
+						log_line("client asked to quit", 1);
+						kill_client($client_id, $clients, $read, '221 Bye');
 						continue;
+
+					} elseif (strpos($input, 'NOOP') !== false) {
+
+						log_line("client NOOP from client", 1);
+						unset($read[$client_id]);
+					} else {
+						log_line('[' . $client_id . ']unrecoginized cmd:' . $input, 1);
+						$clients[$client_id]['response'] = '500 unrecognized command';
+						$clients[$client_id]['error_c']++;
+						if (($clients[$client_id]['error_c'] > 3)) {
+							kill_client($client_id, $clients, $read, '500 Too many unrecognized commands');
+							continue;
+
+						}
+					}
+				}
+				break;
+			case 2:
+
+				$input = read_line($clients, $client_id);
+
+				if ($input) {
+
+					list($id, $to) = save_email($input, $clients[$client_id]['rcpt_to'], $clients[$client_id]['helo'],
+						$clients[$client_id]['address']);
+
+					if ($id) {
+						$clients[$client_id]['response'] = '250 OK : queued as ' . $id;
+						// put client back to state 1
+						$clients[$client_id]['state'] = 1;
+						$clients[$client_id]['read_buffer'] = '';
+						$clients[$client_id]['error_c'] = 0;
+					} else {
+						// The email didn't save properly, usualy because it was in
+						// an incorrect mime format or bad recipient
+						$clients[$client_id]['response'] = "554 Transaction failed";
+						kill_client($client_id, $clients, $read, $clients[$client_id]['response']);
+						log_line("Message for client [$client_id] failed to [$to], told client to exit.",
+							1);
 					}
 
-                    if (is_resource($clients[$client_id]['socket'])) {
-                        // place the socket on the reading list
-                        $read[$client_id] = $clients[$client_id]['socket']; // we want to read this socket
-                    } else {
-                        kill_client($client_id, $clients, $read, '');
-                        continue; // skip this loop, go to the next client
-                    }
-
-                    $input = '';
-                    switch ($clients[$client_id]['state']) {
-                        case 0:
-							
-                            $clients[$client_id]['response'] = '220 ' . GSMTP_HOST_NAME . ' SMTP Guerrilla-SMTPd #'.$client_id.' ('.sizeof($clients).') ' .
-                                gmdate('r');
-                            $clients[$client_id]['state'] = 1;
-
-                            break;
-                        case 1:
-
-                            $input = read_line($clients, $client_id);
-                            if ($input)
-                                log_line('[' . $client_id . '] cmd:' . $input);
-                            if ($input) {
-
-                                if (strpos($input, 'HELO') !== false) {
-                                    $temp = explode(' ', $input);
-									$clients[$client_id]['helo'] = trim($temp[1]);
-                                    $clients[$client_id]['response'] = '250 '.GSMTP_HOST_NAME.' Hello ' . trim($temp[1]) .
-                                        ' ['.$clients[$client_id]['address'].'], got some spam for me?';
-                                } elseif (strpos($input, 'EHLO') !== false) {
-                                    $temp = explode(' ', $input);
-                                    $address = '';
-                                    $port = '';
-                                    $clients[$client_id]['helo'] = trim($temp[1]);
-                                    $clients[$client_id]['response'] = '250-' . GSMTP_HOST_NAME . ' Hello ' . trim($temp[1]) .
-                                        '[' . $clients[$client_id]['address'] . ']' . "\r\n" . "250-SIZE ".GSMTP_MAX_SIZE."\r\n" . //"250-PIPELINING\r\n" .
-                                        //"250-AUTH PLAIN LOGIN\r\n" .
-                                    //"250-STARTTLS\r\n" .
-                                    "250 HELP";
-                                } elseif (strpos($input, 'MAIL FROM:') !== false) {
-                                    $clients[$client_id]['response'] = '250 Ok';
-                                } elseif ((strpos($input, 'RCPT TO:') !== false)) {
-                                    $email = extract_email($input);
-                                    if (empty($clients[$client_id]['rcpt_to']) && ($email)) {
-                                        $clients[$client_id]['rcpt_to'] = $input;
-                                        $clients[$client_id]['response'] = '250 Accepted';
-                                    } else {
-                                        log_line('mailbox unavailable['.array_pop(explode('@',$input)).'] input:'.$input, 1);
-                                        // do not let CC. 
-                                        kill_client($client_id, $clients, $read,
-                                            '550 Requested action not taken: mailbox unavailable');
-                                    }
-
-                                    $clients[$client_id]['response'] = '250 Accepted';
-                                } elseif (strpos($input, 'DATA') !== false) {
-                                    $clients[$client_id]['response'] =
-                                        '354 Enter message, ending with "." on a line by itself';
-                                    $clients[$client_id]['state'] = 2;
-                                    
-                                    $clients[$next_id]['read_buffer'] = '';
-                                } elseif (strpos($input, 'QUIT') !== false) {
-
-                                    log_line("client asked to quit", 1);
-                                    kill_client($client_id, $clients, $read, '221 Bye');
-                                    continue;
-
-                                } elseif (strpos($input, 'NOOP') !== false) {
-
-                                    log_line("client NOOP from client", 1);
-                                    unset($read[$client_id]);
-                                } else {
-                                    log_line('[' . $client_id . ']unrecoginized cmd:' . $input, 1);
-                                    $clients[$client_id]['response'] = '500 unrecognized command';
-                                    $clients[$client_id]['error_c']++;
-                                    if (($clients[$client_id]['error_c'] > 3)) {
-                                        kill_client($client_id, $clients, $read, '500 Too many unrecognized commands');
-                                        continue;
-
-                                    }
-                                }
-                            }
-                            break;
-                        case 2:
-
-                            $input = read_line($clients, $client_id);
-
-                            if ($input) {
-								
-                                list($id, $to) = save_email($input, $clients[$client_id]['rcpt_to'], $clients[$client_id]['helo'], $clients[$client_id]['address']);
-
-                                if ($id) {
-                                    $clients[$client_id]['response'] = '250 OK : queued as ' . $id;
-									// put client back to state 1
-									$clients[$client_id]['state'] = 1;
-									$clients[$client_id]['read_buffer'] = '';
-									$clients[$client_id]['error_c'] = 0;
-                                } else {
-                                    // The email didn't save properly, usualy because it was in
-                                    // an incorrect mime format or bad recipient
-                                    $clients[$client_id]['response'] = "554 Transaction failed";
-									kill_client($client_id, $clients, $read, $clients[$client_id]['response']);
-                                    log_line("Message for client [$client_id] failed to [$to], told client to exit.", 1);
-                                }
-								
-                                continue;
+					continue;
 
 
-                            }
-                            break;
+				}
+				break;
 
 
-                    }
+		}
 
-					process_killed_clients();
+		
 
-                }
+	}
+	process_killed_clients();
 
-                ###################################
-                # Write a response
+	###################################
+	# Write a response
 
-                $write = array(); // sockets we want to write to
-                foreach ($clients as $client_id => $client) {
-                    // buld a list of sockets that need writing
+	$write = array(); // sockets we want to write to
+	foreach ($clients as $client_id => $client) {
+		// buld a list of sockets that need writing
 
-					if (!empty($clients[$client_id]['kill_time'])) {
-						// client is being killed
-						continue;
-					}
+		if (!empty($clients[$client_id]['kill_time'])) {
+			// client is being killed
+			continue;
+		}
 
-                    if (!is_resource($client['socket'])) {
-                        kill_client($client_id, $clints, $read, '');
-                        continue;
-                    } elseif (strlen($clients[$client_id]['response']) > 0) {
+		if (!is_resource($client['socket'])) {
+			kill_client($client_id, $clints, $read, '');
+			continue;
+		} elseif (strlen($clients[$client_id]['response']) > 0) {
 
-                        if (substr($clients[$client_id]['response'], -2) !== "\r\n") {
-                            $clients[$client_id]['response'] .= "\r\n";
-                        }
-                        // append the response to the end of the buffer
-                        $clients[$client_id]['write_buffer'] .= $clients[$client_id]['response'];
-                        $clients[$client_id]['response'] = '';
+			if (substr($clients[$client_id]['response'], -2) !== "\r\n") {
+				$clients[$client_id]['response'] .= "\r\n";
+			}
+			// append the response to the end of the buffer
+			$clients[$client_id]['write_buffer'] .= $clients[$client_id]['response'];
+			$clients[$client_id]['response'] = '';
 
-                    }
-                    if ($clients[$client_id]['write_buffer']) {
-                        // place this socket on the check-list for socket_select()
-                        $write[$client_id] = $client['socket'];
-                    }
-                }
-                if (!empty($write)) {
+		}
+		if ($clients[$client_id]['write_buffer']) {
+			// place this socket on the check-list for socket_select()
+			$write[$client_id] = $client['socket'];
+		}
+	}
+	if (!empty($write)) {
 
-                    $ready = socket_select($N, $write, $N, null); // are there any sockets need writing?
-                    if ($ready) {
-                        foreach ($write as $client_id => $sock) {
-                            /*
-                            If you read/write to a socket, be aware that they do not necessarily read/write 
-                            the full amount of data you have requested. 
-                            Be prepared to even only be able to read/write a single byte.
-                            */
-                            $len = socket_write($sock, $clients[$client_id]['write_buffer'], 
-                                        strlen($clients[$client_id]['write_buffer'])); // we have bufffered a response?
+		$ready = socket_select($N, $write, $N, null); // are there any sockets need writing?
+		if ($ready) {
+			foreach ($write as $client_id => $sock) {
+				/*
+				If you read/write to a socket, be aware that they do not necessarily read/write 
+				the full amount of data you have requested. 
+				Be prepared to even only be able to read/write a single byte.
+				*/
+				$len = socket_write($sock, $clients[$client_id]['write_buffer'], strlen($clients[$client_id]['write_buffer'])); // we have bufffered a response?
 
-                            if ($len) {
-                                $address = '';
-                                $port = '';
-                                socket_getpeername($sock, $address, $port);
-                                log_line('[' . $client_id . ']' . $address . ':' . $port . '=>' . $clients[$client_id]['write_buffer']);
-                                // remove form the buffer the number of characters written out
-                                $clients[$client_id]['write_buffer'] = substr($clients[$client_id]['write_buffer'],
-                                    $len);
-
-
-                            } elseif ($len === false) {
-                                log_line('[' . $client_id . ']Failed to write to ' . $clients[$client_id]['address'] .
-                                    ':' . socket_strerror(socket_last_error()), 1);
-                                kill_client($client_id, $clients, $read, '');
-                            }
-                        }
-                    }
-                }
+				if ($len) {
+					$address = '';
+					$port = '';
+					socket_getpeername($sock, $address, $port);
+					log_line('[' . $client_id . ']' . $address . ':' . $port . '=>' . $clients[$client_id]['write_buffer']);
+					// remove form the buffer the number of characters written out
+					$clients[$client_id]['write_buffer'] = substr($clients[$client_id]['write_buffer'],
+						$len);
 
 
-            } // end while
-            // Close the client (child) socket
+				} elseif ($len === false) {
+					log_line('[' . $client_id . ']Failed to write to ' . $clients[$client_id]['address'] .
+						':' . socket_strerror(socket_last_error()), 1);
+					kill_client($client_id, $clients, $read, '');
+				}
+			}
+		}
+	}
 
-            if (is_resource($master_socket)) {
-                socket_shutdown($master_socket, 2);
-                socket_close($master_socket);
-            }
-            exit();
-        }
+
+} // end while
+// Close the client (child) socket
+
+if (is_resource($master_socket)) {
+	socket_shutdown($master_socket, 2);
+	socket_close($master_socket);
 }
+exit();
+	
+
 
 
 /**
@@ -695,19 +697,19 @@ for (;; ) {
  */
 function kill_client($client_id, &$clients, &$read, $msg = null)
 {
-    	
+
     if (isset($clients[$client_id])) {
 
-		$clients[$client_id]['kill_time'] = time();
-		if (strlen($msg) > 0) {
-			if (substr($msg, -2) !== "\r\n") {
-				$msg .= "\r\n";
-			}
-			// there may be some other data on the buffer so we append the msg
-			$clients[$client_id]['write_buffer'] .= $msg;
-		}
+        $clients[$client_id]['kill_time'] = time();
+        if (strlen($msg) > 0) {
+            if (substr($msg, -2) !== "\r\n") {
+                $msg .= "\r\n";
+            }
+            // there may be some other data on the buffer so we append the msg
+            $clients[$client_id]['write_buffer'] .= $msg;
+        }
 
-       // remove from the clients to read
+        // remove from the clients to read
         unset($read[$client_id]);
 
     }
@@ -719,57 +721,51 @@ function kill_client($client_id, &$clients, &$read, $msg = null)
  * and close the socket when there are no more chars to write or the
  * socket was closed by the other side
  */
-function process_killed_clients() {
-	global $clients;
-	global $client_count;
-	foreach ($clients as $client_id => $client) {
+function process_killed_clients()
+{
+    global $clients;
 
-		if (empty($client['kill_time'])) {
-			continue;
-		}
+    foreach ($clients as $client_id => $client) {
 
-		if (!is_resource($client['socket'])) {
+        if (empty($client['kill_time'])) {
+            continue;
+        }
 
-			$client_count--;
-			unset($clients[$client_id]);
-			continue;
-		}
+        if (!is_resource($client['socket'])) {
+            unset($clients[$client_id]);
+            continue;
+        }
 
-		if (($client['kill_time'] + 60) < time()) { // was on the kill list too long!
-			// timeout
-			close_client($client['socket']);
-			$client_count--;
-			unset($clients[$client_id]);
-			continue;
+        if (($client['kill_time'] + 5) < time()) { // was on the kill list too long!
+            // timeout
+            close_client($client['socket']);
+            unset($clients[$client_id]);
+            continue;
 
-		}
-		
-		if (strlen($client['write_buffer'])>0) {
-			// write out, $len returns how many bytes were written
-			$len = socket_write($client['socket'], $client['write_buffer'], 
-                                        strlen($client['write_buffer']));
-			if ($len) {
-				$clients[$client_id]['write_buffer'] = substr($client['write_buffer'],
-                                   $len);
-			}
-			if ($len===false) {
-				close_client($client['socket']);
-				$client_count--;
-				unset($clients[$client_id]);
-				continue;
-			}
+        }
 
-		}
-		if (strlen($clients[$client_id]['write_buffer'])==0) {
-			if (is_resource($client['socket'])) {
-				close_client($client['socket']);			
-				log_line("client killed [" . $client['address'] . "]", 1);
-			}
-			$client_count--;
-			unset($clients[$client_id]);
-		}
+        if (strlen($client['write_buffer']) > 0) {
+            // write out, $len returns how many bytes were written
+            $len = socket_write($client['socket'], $client['write_buffer'], strlen($client['write_buffer']));
+            if ($len) {
+                $clients[$client_id]['write_buffer'] = substr($client['write_buffer'], $len);
+            }
+            if ($len === false) {
+                close_client($client['socket']);
+                unset($clients[$client_id]);
+                continue;
+            }
 
-	}
+        }
+        if (strlen($clients[$client_id]['write_buffer']) == 0) {
+            if (is_resource($client['socket'])) {
+                close_client($client['socket']);
+                log_line("client killed [" . $client['address'] . "]", 1);
+            }
+            unset($clients[$client_id]);
+        }
+
+    }
 
 }
 #########################################################################################
@@ -778,9 +774,10 @@ function process_killed_clients() {
  * Use php's ability to set an error handler, since iconv may sometimes give
  * warnings. this allows us to trap these warnings
  */
-function iconv_error_handler($errno, $errstr, $errfile, $errline) {
-	global $iconv_error;
-	$iconv_error = true;
+function iconv_error_handler($errno, $errstr, $errfile, $errline)
+{
+    global $iconv_error;
+    $iconv_error = true;
 
 }
 /**
@@ -793,8 +790,8 @@ function iconv_error_handler($errno, $errstr, $errfile, $errline) {
  */
 function mail_body_decode($str, $encoding_type, $charset = 'UTF-8')
 {
-	global $iconv_error;
-	$iconv_error=false;
+    global $iconv_error;
+    $iconv_error = false;
 
     if ($encoding_type == 'base64') {
         $str = base64_decode($str);
@@ -803,15 +800,15 @@ function mail_body_decode($str, $encoding_type, $charset = 'UTF-8')
     }
 
     if (strtoupper($charset) != 'UTF-8') {
-		$old_error_handler = set_error_handler("iconv_error_handler");
+        $old_error_handler = set_error_handler("iconv_error_handler");
         $str = @iconv(strtoupper($charset), 'UTF-8', $str);
-		if ($iconv_error) {
-			// there was iconv error
-			// attempt mbstring concersion
-			$str = mb_convert_encoding($str, 'UTF-8', $charset);
-			return $str;			
-		}
-		restore_error_handler();
+        if ($iconv_error) {
+            // there was iconv error
+            // attempt mbstring concersion
+            $str = mb_convert_encoding($str, 'UTF-8', $charset);
+            return $str;
+        }
+        restore_error_handler();
     }
     return $str;
 
@@ -873,12 +870,12 @@ function extract_from_email($str)
  */
 function save_email($email, $rcpt_to, $helo, $helo_ip)
 {
-    
+
 
     global $listen_port;
     $mimemail = null;
     $spam_score = '';
-	$email .= "\r\n";
+    $email .= "\r\n";
 
     $mimemail = mailparse_msg_create(); // be sure to free this for each email to avoid memory leaks
     if ($listen_port == 2525) {
@@ -926,7 +923,7 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
             $body = substr($email, $start, $end - $start);
             $body = mail_body_decode($body, $transfer_encoding, $charset);
             $content_type = $parts[$part_id]['content-type'];
-            if ($body=trim($body)) {
+            if ($body = trim($body)) {
                 break; // exit the foreach - use this one
             }
         } elseif ($parts[$part_id]['content-type'] == 'text/plain') {
@@ -956,16 +953,16 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
         echo "bo\;l\;lkjfdsay:[" . $body . ']';
     }
     if (is_array($subject)) {
-        error_log(var_export($subject, true));
+        //error_log(var_export($subject, true));
         $subject = array_pop($subject);
     }
     $subject = @iconv_mime_decode($subject, 1, 'UTF-8');
 
 
     list($mail_user, $mail_host) = explode('@', $to);
-    
+
     global $GM_ALLOWED_HOSTS; // allowed hosts
-    
+
     /*
     What is $spam_score? Earlier versions used spamd (Spam Assasin)
     to check the spam score of an email. Email the author if you are
@@ -973,9 +970,9 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
     */
 
     if (in_array($mail_host, $GM_ALLOWED_HOSTS) && ($spam_score < 5.1)) {
-        
+
         $mysql_link = get_mysql_link();
-        if ($mysql_link===false) {
+        if ($mysql_link === false) {
             // could not get a db connection
             return array(false, false);
         }
@@ -1001,14 +998,15 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
 
         $hash = md5($to . $from . $subject . $body); // generate an id for the email
 
-		// add 'received' headers
-		$add_head = '';
-		$add_head .= "Delivered-To: ".$to."\r\n";
-		$add_head .= "Received: from ".$helo." (".$helo."  [".$helo_ip."])\r\n";
-		$add_head .= "	by ".GSMTP_HOST_NAME." with SMTP id ".$hash."@".GSMTP_HOST_NAME.";\r\n";
-		$add_head .= "	".gmdate('r')."\r\n";
+        // add 'received' headers
+        $add_head = '';
+        $add_head .= "Delivered-To: " . $to . "\r\n";
+        $add_head .= "Received: from " . $helo . " (" . $helo . "  [" . $helo_ip . "])\r\n";
+        $add_head .= "	by " . GSMTP_HOST_NAME . " with SMTP id " . $hash . "@" .
+            GSMTP_HOST_NAME . ";\r\n";
+        $add_head .= "	" . gmdate('r') . "\r\n";
 
-		$email = $add_head . $email;
+        $email = $add_head . $email;
 
         mysql_query("Lock tables " . GM_MAIL_TABLE . " write, gm2_setting write");
 
@@ -1027,7 +1025,7 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
             $sql = "UPDATE gm2_setting SET `setting_value` = `setting_value`+1 WHERE `setting_name`='received_emails' LIMIT 1";
             mysql_query($sql);
         } else {
-            log_line('Failed to save email From:'.$from.' To:'.$recipient, 1);
+            log_line('Failed to save email From:' . $from . ' To:' . $recipient, 1);
         }
         mysql_query("UNLOCK TABLES");
 
