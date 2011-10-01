@@ -9,7 +9,7 @@ Copyright 2011
 An SMTP server written in PHP, optimized for receiving email and storing in 
 MySQL. Written for GuerrillaMail.com which processes thousands of emails
 every hour.
-Version: 1.2.3
+Version: 1.2.2
 Author: Clomode
 Contact: flashmob@gmail.com
 License: GPL (GNU General Public License, v3)
