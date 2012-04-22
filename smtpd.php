@@ -36,10 +36,17 @@ See README for more details
 
 Version History:
 
+ 2.0.1
+- Adjusted header extraction
+- Memcached was a bad idea. Perhaps CouchDB?
+- Compression before saving (changed MySQL mail fields to BLOB)
+
 2.0
 - First release, re-write of Guerrilla SMTPd 1.2 to use libevent
 http://www.php.net/manual/en/book.libevent.php
 
+
+ *
  */
 
 
@@ -187,17 +194,7 @@ function &get_mysql_link($reconnect = false)
 
 }
 
-function &get_memcache()
-{
-    static $memcache;
-    if (is_object($memcache)) {
-        return $memcache;
-    }
-    $memcache = new Memcache;
-    $memcache->connect('localhost', 11211) or die ("Could not connect");
-    return $memcache;
 
-}
 
 ##############################################################
 # Guerrilla SMTPd, Main
@@ -682,6 +679,7 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
     $hash = '';
     $email .= "\r\n";
 
+
     list($to, $from, $subject) = get_email_headers($email, array('To', 'From', 'Subject'));
     $to = extract_email($to);
     $from = extract_from_email($from);
@@ -740,11 +738,10 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
 
         $email = $add_head . $email;
 
-        $Mem = get_memcache();
-        if ($Mem->set($hash, $email, MEMCACHE_COMPRESSED, 4600) === true) {
-            $email = '';
-            $body = '';
-        }
+        //$email = gzcompress($email, 9);
+        $body='gzencode';
+
+
         $charset = '';
         $has_attach = '';
         $content_type = '';
@@ -753,7 +750,7 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
             gmdate('Y-m-d H:i:s') . "', '" . mysql_real_escape_string($to) . "', '" .
             mysql_real_escape_string($from) . "', '" . mysql_real_escape_string($subject) .
             "',  '" . mysql_real_escape_string($body) . "', '" . mysql_real_escape_string($charset) .
-            "', '" . mysql_real_escape_string($email) . "', 0" .
+            "', '" . mysql_real_escape_string(gzcompress($email,  6)) . "', 0" .
             ", '" . mysql_real_escape_string($hash) . "', '" . mysql_real_escape_string($content_type) .
             "', '" . mysql_real_escape_string($to) . "', '" . mysql_real_escape_string($has_attach) . "') ";
 
@@ -764,7 +761,7 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
             $sql = "UPDATE gm2_setting SET `setting_value` = `setting_value`+1 WHERE `setting_name`='received_emails' LIMIT 1";
             mysql_query($sql);
         } else {
-            log_line('Failed to save email From:' . $from . ' To:' . $to, 1);
+            log_line('Failed to save email From:' . $from . ' To:' . $to.' '.mysql_error().' '.$sql, 1);
         }
 
     }
@@ -786,8 +783,8 @@ function get_email_headers($email, $header_names = array())
 
         foreach ($header_names as $i => $name) {
 
-            if (stripos($h, $name . ': ') === 0) {
-                $ret[$i] = substr($h, strlen($name) + 2);
+            if (stripos($h, $name . ':') === 0) {
+                $ret[$i] = trim(substr($h, strlen($name) + 1));
             }
 
         }

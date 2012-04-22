@@ -48,8 +48,8 @@ Threads are great if you have many CPU cores, but our server only had two.
 Besides, our process was I/O bound - the bottleneck was not the CPU.
 So how to solve this one? Simple, version 2 was re-written to use
 event-driven I/O, using libevent extension for PHP. So instead of polling to
-see if there are any new changes, our server gets an event notification and
-hanles the I/O immediately without waiting.
+see if there are any sockets to be checked, our server gets an event notification
+and hanles the I/O immediately without waiting.
 
 Again, the improvement has been dramatic. The load average has decreased
 substantially, freeing the CPU for other tasks. Both the disk and network
@@ -127,21 +127,22 @@ Database Schema:
 CREATE TABLE IF NOT EXISTS `new_mail` (
   `mail_id` int(11) NOT NULL auto_increment,
   `date` datetime NOT NULL,
-  `from` varchar(128) NOT NULL,
-  `to` varchar(128) NOT NULL,
+  `from` varchar(128) character set utf8 NOT NULL,
+  `to` varchar(128) character set utf8 NOT NULL,
   `subject` varchar(255) character set utf8 NOT NULL,
-  `body` text character set utf8 NOT NULL,
-  `charset` varchar(32) NOT NULL,
-  `mail` text NOT NULL,
+  `body` text NOT NULL,
+  `charset` varchar(32) character set utf8 NOT NULL,
+  `mail` longblob NOT NULL,
   `spam_score` float NOT NULL,
-  `hash` char(32) NOT NULL,
-  `content_type` varchar(64) NOT NULL,
-  `recipient` varchar(128) NOT NULL,
+  `hash` char(32) character set latin1 NOT NULL,
+  `content_type` varchar(64) character set latin1 NOT NULL,
+  `recipient` varchar(128) character set latin1 NOT NULL,
+  `has_attach` int(11) NOT NULL,
   PRIMARY KEY  (`mail_id`),
   KEY `to` (`to`),
   KEY `hash` (`hash`),
   KEY `date` (`date`)
-) ENGINE=InnoDB  DEFAULT CHARSET=UTF-8;
+) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
 
 
 Special Thanks to the authors of these pages:
