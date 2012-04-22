@@ -1,13 +1,14 @@
 Guerrilla SMTPd
 
-An SMTP server written in PHP, optimized for receiving email and storing in 
-MySQL. Written for GuerrillaMail.com which processes thousands of emails
+An minimalist, event-driven I/O, non-blocking SMTP server in PHP
+
+Written for GuerrillaMail.com which processes tens of thousands of emails
 every hour.
 
 Copyright 2011
-Author: Clomode
+Author: Flashmob, GuerrillaMail.com
 Contact: flashmob@gmail.com
-License: GPL (GNU General Public License, v3)
+License: MIT
 
 Why do we need this?
 
@@ -15,7 +16,7 @@ Originally, Guerrilla Mail was running the Exim mail server, and the emails
 were fetched using POP.
 
 This proved to be inefficient and unreliable, so the system was replaced in 
-favor of piping the emails directly in to a PHP script.
+favour of piping the emails directly in to a PHP script.
 
 Soon, the piping solution  became a problem too; it required a new process to 
 be started for each arriving email, and it also required a new database 
@@ -31,35 +32,48 @@ domain keys, Spam Assassin, etc).
 We only need to open a single database connection and a single process can be 
 re-used indefinitely. The PHP server is able to multiplex simultaneous 
 connections, and it can pass the email directly to the MySQL database as soon 
-as it is received.
+as it is received. (Version 2.0 also uses Memcached if available)
 
 So now we can receive, process and store email all in the one process.
 The performance improvement has been dramatic. 
 
+However, a few months later, the volume of email increased again and
+this time our server's CPU was under pressure. You see, the problem was that
+the SMTP server was checking the sockets in a loop all the time. This is fine
+if you have a few sockets, but horrible if you have 1000! A common way to solve
+this is to have a connection per thread - and a thread can sleep while it is
+waiting for a socket, not polling all the time.
+
+Threads are great if you have many CPU cores, but our server only had two.
+Besides, our process was I/O bound - the bottleneck was not the CPU.
+So how to solve this one? Simple, version 2 was re-written to use
+event-driven I/O, using libevent extension for PHP. So instead of polling to
+see if there are any new changes, our server gets an event notification and
+hanles the I/O immediately without waiting.
+
+Again, the improvement has been dramatic. The load average has decreased
+substantially, freeing the CPU for other tasks. Both the disk and network
+card have quite a bit of unused capacity, and we're ready for the next bump!
+
 The purpose of this daemon is to grab the email, save it to the database
 and disconnect as quickly as possible.
 
-Only simple MIME processing of the email is performed:
-- For each email, the header is parsed to determine if the email intended for
-the domains serviced. (You wouldn't believe how many spammers do this!)
-- For each email, the body of the email is identified, decoded and converted
-to UTF-8.
+For version 2.0, MIME processing was removed and pushed further up the stack
+since not all emails need to be processed.
 
 This server does attempt to filter HTML, check for spam or do any sender 
 verification. These steps should be performed by other programs.
 The server does NOT send any email including bounces. Again, this should
 be performed by a separate program.
 
-TO DO: Forking. The parent could fork the worker child and watch the worker.
-Then re-start the worker if it dies. Currently, the server is able to
-multiplex connections, so forking is not really necessary.
 
 
 HOW TO USE / Installation:
 
 - Since the server needs to use port 25, make sure to start as root/admin
 - Ensure that your PHP has mb_string and mailparse extensions enabled.
-also requires php sockets, iconv
+also requires php sockets, iconv, eventlib
+http://php.net/manual/en/book.libevent.php
 http://php.net/manual/en/book.mailparse.php
 http://www.php.net/manual/en/book.mbstring.php
 http://www.php.net/manual/en/book.iconv.php
@@ -97,7 +111,7 @@ Here is an example of /home/user/startsmtpd which will start the smtpd
 in the background:
 
 #!/bin/bash
-/usr/bin/nohup php /home/user/smtpd.php -l /home/user/log.txt & > /dev/null
+/usr/bin/nohup php -d memory_limit=1024M /home/gmail/smtpd.php >> /home/gmail/smtpd_out 2>&1 &
 
 Save the 2 lines above in to a file named startsmtpd
 and then do: 
