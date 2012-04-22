@@ -45,13 +45,18 @@ this is to have a connection per thread - and a thread can sleep while it is
 waiting for a socket, not polling all the time.
 
 Threads are great if you have many CPU cores, but our server only had two.
-Besides, our process was I/O bound - the bottleneck was not the CPU.
-So how to solve this one? Simple, version 2 was re-written to use
-event-driven I/O, using libevent extension for PHP. So instead of polling to
-see if there are any sockets to be checked, our server gets an event notification
-and hanles the I/O immediately without waiting.
+Besides, our process was I/O bound - so the bottleneck was not the CPU.
+So how to solve this one? 
 
-Again, the improvement has been dramatic. The load average has decreased
+Instead of polling in an infinite loop to see if there are any sockets to be 
+operated, it is much more efficent to be notified when the sockets are ready.
+This Wikipedia entry explains it best, 
+http://en.wikipedia.org/wiki/Asynchronous_I/O see "Select(/poll) loops"
+To take advantage of epoll or kqueue would be nice, and luck has it
+that an extension is available for PHP! One night later, and version 2 was made
+to use libevent http://pecl.php.net/package/libevent
+
+The improvement has been superb. The load average has decreased
 substantially, freeing the CPU for other tasks. Both the disk and network
 card have quite a bit of unused capacity, and we're ready for the next bump!
 
@@ -61,7 +66,7 @@ and disconnect as quickly as possible.
 For version 2.0, MIME processing was removed and pushed further up the stack
 since not all emails need to be processed.
 
-This server does attempt to filter HTML, check for spam or do any sender 
+This server does not attempt to filter HTML, check for spam or do any sender 
 verification. These steps should be performed by other programs.
 The server does NOT send any email including bounces. Again, this should
 be performed by a separate program.
