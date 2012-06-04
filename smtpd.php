@@ -25,7 +25,7 @@ It's a small SMTP server written in PHP, optimized for receiving email.
 Written for GuerrillaMail.com which processes tens of thousands of emails
 every hour.
 
-Version: 2.0
+Version: 2.2
 Author: Flashmob, GuerrillaMail.com
 Contact: flashmob@gmail.com
 License: MIT
@@ -36,7 +36,14 @@ See README for more details
 
 Version History:
 
- 2.0.1
+2.2
+- decoding of email headers improved
+- replaced imap_rfc822_parse_adrlist() with mailparse_rfc822_parse_addresses() as it's more portable
+- bug in get_email_headers
+- posix_seteuid() to user-level after opening port 25
+- code cleanup
+
+2.1
 - Adjusted header extraction
 - Memcached was a bad idea. Perhaps CouchDB?
 - Compression before saving (changed MySQL mail fields to BLOB)
@@ -128,6 +135,7 @@ if (file_exists(dirname(__file__) . '/smtpd-config.php')) {
     define('MYSQL_USER', 'gmail_mail');
     define('MYSQL_PASS', 'ok');
     define('MYSQL_DB', 'gmail_mail');
+    define('GSMTP_USER', 'nobody');
 
     define('GM_MAIL_TABLE', 'new_mail'); // MySQL table for storage
 
@@ -162,17 +170,17 @@ function &get_mysql_link($reconnect = false)
 
     static $link;
     global $DB_ERROR;
-    static $last_get_time;
-    if (isset($last_get_time)) {
+    static $last_ping_time;
+    if (isset($last_ping_time)) {
         // more than a minute ago?
-        if (($last_get_time + 60) < time()) {
+        if (($last_ping_time + 30) < time()) {
             if (false === mysql_ping($link)) {
                 $reconnect = true; // try to reconnect
             }
-            $last_get_time = time();
+            $last_ping_time = time();
         }
     } else {
-        $last_get_time = time();
+        $last_ping_time = time();
     }
 
 
@@ -201,7 +209,7 @@ function &get_mysql_link($reconnect = false)
 ##############################################################
 
 $GM_ALLOWED_HOSTS = explode(',', GM_ALLOWED_HOSTS);
-
+$GM_ERROR = false;
 // Check MySQL connection
 
 if (get_mysql_link() === false) {
@@ -227,6 +235,12 @@ event_set($event, $socket, EV_READ | EV_PERSIST, 'ev_accept', $base);
 event_base_set($event, $base);
 event_add($event);
 log_line("Guerrilla Mail Daemon started on port " . $listen_port, 1);
+
+// drop down to user level after opening the smptp port
+$user = posix_getpwnam(GSMTP_USER);
+posix_setgid($user['gid']);
+posix_setuid($user['uid']);
+$user = null;
 
 event_base_loop($base);
 
@@ -369,7 +383,7 @@ function process_smtp($client_id)
 {
 
     global $clients;
-
+    global $GM_ERROR;
 
     switch ($clients[$client_id]['state']) {
         case 0:
@@ -476,8 +490,10 @@ function process_smtp($client_id)
                     // The email didn't save properly, usualy because it was in
                     // an incorrect mime format or bad recipient
 
-                    kill_client($client_id, "554 Transaction failed");
-                    log_line("Message for client: [$client_id] failed to [$to] {" . $clients[$client_id]['rcpt_to'] . "}, told client to exit.",
+                    kill_client($client_id, "554 Transaction failed (".strlen($input).") ".
+                        $clients[$client_id]['rcpt_to']." !$id! \{$GM_ERROR\} ".mysql_error());
+                    log_line("Message for client: [$client_id] failed to [$to] {"
+                            . $clients[$client_id]['rcpt_to'] . "}, told client to exit.",
                         1);
                 }
                 continue;
@@ -592,6 +608,7 @@ function iconv_error_handler($errno, $errstr, $errfile, $errline)
  */
 function mail_body_decode($str, $encoding_type, $charset = 'UTF-8')
 {
+
     global $iconv_error;
     $iconv_error = false;
 
@@ -600,20 +617,37 @@ function mail_body_decode($str, $encoding_type, $charset = 'UTF-8')
     } elseif ($encoding_type == 'quoted-printable') {
         $str = quoted_printable_decode($str);
     }
+    $charset = strtolower($charset);
+    $charset=preg_replace("/[-:.\/\\\]/", '-', strtolower($charset));
+    // Fix charset
+    // borrowed from http://squirrelmail.svn.sourceforge.net/viewvc/squirrelmail/trunk/squirrelmail/include/languages.php?revision=13765&view=markup
+    // OE ks_c_5601_1987 > cp949
+    $charset=str_replace('ks_c_5601_1987','cp949',$charset);
+    // Moz x-euc-tw > euc-tw
+    $charset=str_replace('x_euc','euc',$charset);
+    // Moz x-windows-949 > cp949
+    $charset=str_replace('x_windows_','cp',$charset);
+    // windows-125x and cp125x charsets
+    $charset=str_replace('windows_','cp',$charset);
+    // ibm > cp
+    $charset=str_replace('ibm','cp',$charset);
+    // iso-8859-8-i -> iso-8859-8
+    // use same cycle until they'll find differences
+    $charset=str_replace('iso_8859_8_i','iso_8859_8',$charset);
 
     if (strtoupper($charset) != 'UTF-8') {
-        $old_error_handler = set_error_handler("iconv_error_handler");
+        set_error_handler("iconv_error_handler");
         $str = @iconv(strtoupper($charset), 'UTF-8', $str);
         if ($iconv_error) {
+            $iconv_error = false;
             // there was iconv error
             // attempt mbstring concersion
             $str = mb_convert_encoding($str, 'UTF-8', $charset);
-            return $str;
         }
         restore_error_handler();
     }
-    return $str;
 
+    return $str;
 
 }
 
@@ -630,30 +664,28 @@ function extract_email($str)
         $allowed_hosts = explode(',', GM_ALLOWED_HOSTS);
     }
 
-    $arr = imap_rfc822_parse_adrlist($str, GM_PRIMARY_MAIL_HOST);
+    $arr = mailparse_rfc822_parse_addresses($str);
 
     foreach ($arr as $item) {
-
-        if (in_array(strtolower($item->host), $allowed_hosts)) {
-            return strtolower($item->mailbox . '@' . $item->host);
+        $hostname = '';
+        $pos = strpos($item['address'], '@');
+        if ($pos) {
+            $hostname = substr($item['address'], $pos + 1);
+        }
+        if (in_array(strtolower($hostname), $allowed_hosts)) {
+            return strtolower($item['address']);
         }
     }
     return false;
 
 }
 
-/**
- * extract_from_email()
- * See extract_email
- * @param string $str
- * @return string
- */
 function extract_from_email($str)
 {
 
-    $arr = imap_rfc822_parse_adrlist($str, GM_PRIMARY_MAIL_HOST);
-    foreach ($arr as $item) {
-        return strtolower($item->mailbox . '@' . $item->host);
+    $arr = mailparse_rfc822_parse_addresses($str);
+    if (!empty($arr)) {
+        return $arr[0]['address'];
     }
     return false;
 
@@ -672,6 +704,7 @@ function extract_from_email($str)
  */
 function save_email($email, $rcpt_to, $helo, $helo_ip)
 {
+    global $GM_ERROR;
 
 
     global $listen_port;
@@ -681,19 +714,18 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
 
 
     list($to, $from, $subject) = get_email_headers($email, array('To', 'From', 'Subject'));
-    $to = extract_email($to);
+
+    $rcpt_to = extract_email($rcpt_to);
+    //if (is_array($to)) {
+    //    $to = implode(', ',$to);
+    //}
+    if (!$from) {
+        echo 'FROM was null.. ';
+    }
     $from = extract_from_email($from);
 
 
-
-    if (is_array($subject)) {
-
-        $subject = array_pop($subject);
-    }
-    $subject = @iconv_mime_decode($subject, 1, 'UTF-8');
-
-
-    list($mail_user, $mail_host) = explode('@', $to);
+    list($mail_user, $mail_host) = explode('@', $rcpt_to);
 
     global $GM_ALLOWED_HOSTS; // allowed hosts
 
@@ -704,6 +736,7 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
         $mysql_link = get_mysql_link();
         if ($mysql_link === false) {
             // could not get a db connection
+            $GM_ERROR = 'could not get a db connection';
             return array(false, false);
         }
 
@@ -721,6 +754,7 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
                     mysql_real_escape_string($user) . "@guerrillamailblock.com' ";
                 $result = mysql_query($sql);
                 if (mysql_num_rows($result) == 0) {
+                    $GM_ERROR = 'could not verify user';
                     return false; // no such address
                 }
             }
@@ -738,7 +772,6 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
 
         $email = $add_head . $email;
 
-        //$email = gzcompress($email, 9);
         $body='gzencode';
 
 
@@ -746,7 +779,8 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
         $has_attach = '';
         $content_type = '';
         $sql = "INSERT INTO " . GM_MAIL_TABLE .
-            " (`date`, `to`, `from`, `subject`, `body`, `charset`, `mail`, `spam_score`, `hash`, `content_type`, `recipient`, `has_attach` ) VALUES ('" .
+            " (`date`, `to`, `from`, `subject`, `body`, `charset`, `mail`, `spam_score`, `hash`, `content_type`, `recipient`, `has_attach` )
+            VALUES ('" .
             gmdate('Y-m-d H:i:s') . "', '" . mysql_real_escape_string($to) . "', '" .
             mysql_real_escape_string($from) . "', '" . mysql_real_escape_string($subject) .
             "',  '" . mysql_real_escape_string($body) . "', '" . mysql_real_escape_string($charset) .
@@ -761,9 +795,13 @@ function save_email($email, $rcpt_to, $helo, $helo_ip)
             $sql = "UPDATE gm2_setting SET `setting_value` = `setting_value`+1 WHERE `setting_name`='received_emails' LIMIT 1";
             mysql_query($sql);
         } else {
+
+            $GM_ERROR = 'save error '. mysql_error();
             log_line('Failed to save email From:' . $from . ' To:' . $to.' '.mysql_error().' '.$sql, 1);
         }
 
+    } else {
+        $GM_ERROR = " -$mail_host- not in allowed hosts:".$mail_host." ";
     }
     log_line('save_email() called, to:[' . $to . '] ID:' . $id);
 
@@ -776,18 +814,43 @@ function get_email_headers($email, $header_names = array())
 
     $ret = array();
     $pos = strpos($email, "\r\n\r\n");
-    $headers = substr($email, 0, $pos);
-    $headers = explode("\r\n", $headers);
+    if (!$pos) {
+        // incorrectly formatted email with missing \r?
+        $pos = strpos($email, "\n\n");
+    }
+    $headers_str = substr($email, 0, $pos);
 
-    foreach ($headers as $h) {
+    $headers = iconv_mime_decode_headers($headers_str, ICONV_MIME_DECODE_CONTINUE_ON_ERROR, 'utf-8');
 
-        foreach ($header_names as $i => $name) {
-
-            if (stripos($h, $name . ':') === 0) {
-                $ret[$i] = trim(substr($h, strlen($name) + 1));
-            }
-
+    foreach($header_names as $i =>$name) {
+        if (is_array($headers[$name])) {
+            $headers[$name] = implode (', ', $headers[$name]);
         }
+        if ((strpos($headers[$name], '=?')===0)) {
+            // workaround if iconv_mime_decode_headers() - sometimes more than one to decode
+            if (preg_match_all('#=\?(.+?)\?([QB])\?(.+?)\?=#i', $headers[$name], $matches)) {
+                $decoded_str = '';
+
+                foreach($matches[1] as $index => $encoding) {
+                    //if ($matc)
+                    if (strtolower($matches[2][$index])==='b') {
+                        $decoded_str =
+                            mail_body_decode($matches[3][$index], 'base64', $encoding);
+                    } elseif (strtolower($matches[2][$index])==='q') {
+                        $decoded_str =
+                            mail_body_decode($matches[3][$index], 'quoted-printable',  $encoding);
+                    }
+
+                    if (!empty($decoded_str)) {
+                        $headers[$name] = str_replace($matches[0][$index], $decoded_str, $headers[$name]);
+                    }
+
+                }
+
+            }
+        }
+        $ret[$i] = $headers[$name];
+
     }
 
     return $ret;
