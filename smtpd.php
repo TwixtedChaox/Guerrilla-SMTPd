@@ -951,6 +951,7 @@ function get_email_headers($email, $header_names = array())
     }
     $headers_str = substr($email, 0, $pos);
     $headers = iconv_mime_decode_headers($headers_str, ICONV_MIME_DECODE_CONTINUE_ON_ERROR, 'utf-8');
+    $headers = array_combine(array_map("ucfirst", array_keys($headers)), array_values($headers));
     foreach ($header_names as $i => $name) {
         if (is_array($headers[$name])) {
             $headers[$name] = implode(', ', $headers[$name]);
