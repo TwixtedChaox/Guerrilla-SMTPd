@@ -133,7 +133,7 @@ if (file_exists(dirname(__FILE__) . '/smtpd-config.php')) {
     define('GSMTP_MAX_SIZE', 131072);
     define('GSMTP_HOST_NAME', 'guerrillamail.com'); // This should also be set to reflect your RDNS
     define('GSMTP_LOG_FILE', $log_file);
-    define('GSMTP_VERBOSE', $verbose);E
+    define('GSMTP_VERBOSE', $verbose);
     define('GSMTP_TIMEOUT', 100); // how many seconds before timeout.
     define('MYSQL_HOST', 'localhost');
     define('MYSQL_USER', 'gmail_mail');
