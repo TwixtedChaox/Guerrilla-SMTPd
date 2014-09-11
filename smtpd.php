@@ -466,7 +466,7 @@ function process_smtp($client_id)
             }
             if ($input) {
 
-                if (stripos($input, 'HELO') !== false) {
+                if (stripos($input, 'HELO') === 0) {
                     $temp = explode(' ', $input);
                     $clients[$client_id]['helo'] = trim($temp[1]);
                     add_response(
@@ -474,7 +474,7 @@ function process_smtp($client_id)
                         '250 ' . GSMTP_HOST_NAME . ' Hello ' . trim($temp[1]) .
                         ' [' . $clients[$client_id]['address'] . '], got some spam for me?'
                     );
-                } elseif (stripos($input, 'EHLO') !== false) {
+                } elseif (stripos($input, 'EHLO') === 0) {
                     $temp = explode(' ', $input);
 
                     $clients[$client_id]['helo'] = trim($temp[1]);
@@ -495,7 +495,7 @@ function process_smtp($client_id)
                 } elseif (stripos($input, 'MAIL FROM:') === 0) {
                     $clients[$client_id]['mail_from'] = substr($input, 10);
                     add_response($client_id, '250 Ok');
-                } elseif ((stripos($input, 'RCPT TO:') !== false)) {
+                } elseif ((stripos($input, 'RCPT TO:') === 0)) {
 
                     $email = extract_rcpt_email(substr($input, 8));
                     // do not allow CC, RCPT TO is allowed only once
@@ -514,7 +514,7 @@ function process_smtp($client_id)
                             '550 Requested action not taken: mailbox unavailable'
                         );
                     }
-                } elseif (stripos($input, 'DATA') !== false) {
+                } elseif (stripos($input, 'DATA') === 0) {
                     add_response(
                         $client_id,
                         '354 Enter message, ending with "." on a line by itself'
@@ -522,19 +522,19 @@ function process_smtp($client_id)
                     $clients[$client_id]['state'] = 2;
 
                     $clients[$client_id]['read_buffer'] = '';
-                } elseif (stripos($input, 'QUIT') !== false) {
+                } elseif (stripos($input, 'QUIT') === 0) {
 
                     log_line("client asked to quit", 1);
                     kill_client($client_id, '221 Bye');
                     continue;
 
-                } elseif (stripos($input, 'NOOP') !== false) {
+                } elseif (stripos($input, 'NOOP') === 0) {
 
                     log_line("client NOOP from client", 1);
 
                     add_response($client_id, '250 OK');
 
-                } elseif (stripos($input, 'RSET') !== false) {
+                } elseif (stripos($input, 'RSET') === 0) {
 
                     $clients[$client_id]['read_buffer'] = '';
                     $clients[$client_id]['rcpt_to'] = '';
