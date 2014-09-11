@@ -143,12 +143,20 @@ CREATE TABLE IF NOT EXISTS `new_mail` (
   `content_type` varchar(64) character set latin1 NOT NULL,
   `recipient` varchar(128) character set latin1 NOT NULL,
   `has_attach` int(11) NOT NULL,
+  `ip_addr` varchar(64) NOT NULL,
   PRIMARY KEY  (`mail_id`),
   KEY `to` (`to`),
   KEY `hash` (`hash`),
   KEY `date` (`date`)
 ) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
 
+CREATE TABLE IF NOT EXISTS `gm2_setting` (
+  `id` int(11) NOT NULL auto_increment,
+  `setting_value` int(11) NOT NULL,
+  `date` datetime NOT NULL,
+  `setting_name` varchar(128) character set utf8 NOT NULL,
+  PRIMARY KEY  (`id`)
+) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
 
 Special Thanks to the authors of these pages:
 http://devzone.zend.com/article/1086
