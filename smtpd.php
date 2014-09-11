@@ -166,7 +166,7 @@ if (!function_exists('is_host_allowed')) {
             }
         }
         if (isset($hosts[$host])) {
-            return $hosts[$host];
+            return is_numeric($hosts[$host]);
         }
         return false;
     }
