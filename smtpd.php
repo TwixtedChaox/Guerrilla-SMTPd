@@ -250,7 +250,7 @@ function get_db_link($reconnect = false)
 $GM_ERROR = false;
 // Check MySQL connection
 
-if (get_db_link() === false) {
+if (defined('MYSQL_HOST') && get_db_link() === false) {
     die('Please check your MySQL settings');
 }
 
